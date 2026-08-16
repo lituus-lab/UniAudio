@@ -15,7 +15,7 @@
 ## recording is, and a specified, testable algorithm serves that better than an
 ## approximate clone of an implementation.
 
-import std/math
+import UniMath/native_float
 import contracts
 import ./pcm
 import ./fft
