@@ -9,6 +9,7 @@
 import UniAudio/pcm
 import UniAudio/riff
 import UniAudio/aiff
-export pcm, riff, aiff
+import UniAudio/flac
+export pcm, riff, aiff, flac
 
 const UniAudioVersion* = "0.1.0"
