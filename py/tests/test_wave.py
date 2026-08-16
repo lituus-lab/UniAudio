@@ -61,14 +61,19 @@ def test_sniff_names_the_container_without_decoding(tmp_path):
     assert sniff(FIXTURES / "sweep.flac") == "flac"
 
 
-def test_sniff_names_a_container_this_build_cannot_decode(tmp_path):
-    # An MP3 frame sync: recognised, and said so, rather than called unknown.
+def test_a_sync_word_is_recognised_but_is_not_a_decodable_file(tmp_path):
+    # An MP3 frame sync with nothing behind it: named as MP3, and refused when
+    # opened, rather than decoded into noise.
     path = tmp_path / "song.mp3"
     path.write_bytes(b"\xff\xfb\x90\x00" + b"\x00" * 64)
     assert sniff(path) == "mp3"
-    with pytest.raises(UniAudioError) as failure:
+    with pytest.raises(UniAudioError):
         probe(path)
-    assert "mp3" in str(failure.value)
+
+
+def test_an_mp3_probes_to_the_shape_of_the_wav_it_came_from():
+    assert sniff(FIXTURES / "sweep-mp3.mp3") == "mp3"
+    assert probe(FIXTURES / "sweep-mp3.mp3") == wave_probe(FIXTURES / "sweep.wav")
 
 
 def test_an_alac_m4a_probes_to_the_shape_of_the_wav_it_came_from():

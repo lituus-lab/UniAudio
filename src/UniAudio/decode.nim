@@ -16,6 +16,7 @@ import ./aiff
 import ./flac
 import ./alac
 import ./vorbis
+import ./mp3
 
 type Container* = enum
   ## What a file turned out to be, decodable or not.
@@ -53,7 +54,7 @@ func decodes*(container: Container): bool =
   ## the container itself is read, but either can carry a codec this library
   ## will not decode — AAC, Opus. Only opening it settles that, and the error
   ## then names the codec found.
-  container in {acWave, acAiff, acFlac, acIsoBmff, acOgg}
+  container != acUnknown
 
 proc decode*(data: string): AudioBuffer =
   ## Decode whatever the bytes turn out to be.
@@ -64,11 +65,9 @@ proc decode*(data: string): AudioBuffer =
   of acFlac: readFlac(data)
   of acIsoBmff: readAlac(data)
   of acOgg: readVorbis(data)
+  of acMpegAudio: readMp3(data)
   of acUnknown:
     raise newException(AudioError, "unrecognised audio container")
-  else:
-    raise newException(AudioError,
-      $container & ": recognised, but this build does not decode it")
 
 proc decodeFile*(path: string): AudioBuffer {.contractual.} =
   require:
