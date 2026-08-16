@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 lituus-lab
+import std/[os, math, strformat]
 import nimib
 
 nbInit
@@ -8,95 +9,205 @@ nb.title = "UniAudio"
 nbText: """
 # UniAudio
 
-The reference scaffold every `Uni*` engine is cloned from. It carries one
-hello-world function, `fibonacci`, exposed across the three surfaces each engine
-must ship: **Nim**, a **C ABI**, and a **Python** binding.
+Audio containers, decoders and tags, plus an acoustic fingerprint built on
+them. Give it a file and it gives you samples, whatever the file turned out to
+be.
 
-This page is a nimib book: every Nim block below is compiled and run when the
-book is built, and the output shown is what the code actually produced. A change
-that breaks the API breaks the docs build, so the two cannot drift apart.
+Every Nim block below is compiled and run when this page is built, and the
+output shown is what the code actually produced. Prose that outlives the API it
+describes breaks the build rather than quietly misleading you.
 
-## The Nim surface
+## Samples are one shape
 
-The umbrella module re-exports every public submodule.
+Every decoder produces the same thing: interleaved 32-bit floats in [-1, 1],
+with the rate and channel count that give them meaning. Fixing one
+representation at the boundary is what lets a fingerprint, a waveform display
+and a converter all consume the same buffer without caring which decoder filled
+it.
 """
 
 nbCode:
   import UniAudio
 
-  echo "version ", UniAudioVersion
-  echo "fib(10) = ", fibonacci(10)
-  echo "fib(92) = ", fibonacci(92)
+  echo "UniAudio ", UniAudioVersion
+
+  # Half a second of a 440 Hz tone, in stereo.
+  var tone = initAudioBuffer(sampleRate = 44100, channels = 2, frames = 22050)
+  for frame in 0 ..< tone.format.frames:
+    let value = float32(0.4 * sin(2 * PI * 440 * float(frame) / 44100.0))
+    tone.samples[frame * 2] = value
+    tone.samples[frame * 2 + 1] = value
+
+  echo "rate ", tone.format.sampleRate,
+    ", channels ", tone.format.channels,
+    ", frames ", tone.format.frames,
+    ", ", tone.format.durationSeconds, " s"
 
 nbText: """
-## The domain is part of the contract
+`frames` counts per channel, so a buffer holds `frames * channels` samples. The
+two are easy to confuse, and confusing them halves or doubles a duration.
 
-`fibonacci` is not defined for every `int`. `FibMaxN` is the largest argument
-whose result still fits in `int64`, and that bound is stated as a precondition
-rather than left to the caller to remember.
+## Writing and reading back
+
+The WAV writer is the one place this library produces a file rather than
+consuming one. It exists so a decode can be checked against something you can
+open elsewhere.
 """
 
 nbCode:
-  echo "FibMaxN = ", FibMaxN
-  echo "fib(FibMaxN) = ", fibonacci(FibMaxN)
+  let scratch = getTempDir() / "uniaudio-book-tone.wav"
+  writeWaveFile(scratch, tone)
+  let reread = readWaveFile(scratch)
+  echo "read back ", reread.format.frames, " frames at ",
+    reread.format.sampleRate, " Hz"
+  removeFile(scratch)
 
 nbText: """
-The contract is written with NimContracts (`require:` / `ensure:` / `body:`).
-Under `-d:release` it compiles away entirely: the release build pays nothing,
-while debug builds and the test suite catch a violation at the call site.
+## One entry point, whatever the container
 
-A postcondition never re-derives the result by calling the function again — it
-states a property cheaper to check than the body is to run. Here, `result >= 0`.
+A caller should not have to know what a file is before opening it, and the
+extension is not evidence: a `.wav` holding a FLAC stream is a real thing.
+`sniffFile` names the container from the bytes, and `decodeFile` decodes it.
 
-## The C ABI
+Below are the same three seconds of a sine sweep, put through five formats.
+"""
 
-The same function, reachable from anything that speaks C. The header is
-hand-written and kept in sync with `src/UniAudio/c_api.nim`; `tests/c` links
-one against the other on every CI run, so a drift is caught rather than shipped.
+nbCode:
+  const Fixtures = "tests/fixtures"
+  for name in ["sweep.wav", "sweep.flac", "sweep-alac.m4a",
+               "sweep-vorbis.ogg", "sweep-mp3.mp3"]:
+    let path = Fixtures / name
+    let decoded = decodeFile(path)
+    echo &"{name:<18} {sniffFile(path):<5} " &
+      &"{decoded.format.sampleRate} Hz, {decoded.format.channels} ch, " &
+      &"{decoded.format.frames} frames"
+
+nbText: """
+Each of them decodes to the same shape. The formats differ in what they keep,
+not in what they claim to be.
+
+## What lossless means, measured
+
+FLAC and ALAC give back exactly what went in. Vorbis and MP3 do not, and the
+interesting question is by how much. Comparing each decode against the original
+WAV answers it.
+"""
+
+nbCode:
+  let original = readWaveFile(Fixtures / "sweep.wav")
+
+  proc worstDifference(other: AudioBuffer): float =
+    for index in 0 ..< min(original.samples.len, other.samples.len):
+      result = max(result,
+        abs(float(original.samples[index]) - float(other.samples[index])))
+
+  for name in ["sweep.flac", "sweep-alac.m4a", "sweep-vorbis.ogg",
+               "sweep-mp3.mp3"]:
+    echo &"{name:<18} worst sample difference " &
+      &"{worstDifference(decodeFile(Fixtures / name)):.6f}"
+
+nbText: """
+The two lossless formats come back at zero. The two lossy ones do not, and no
+amount of care in the decoder would change that — the information went at the
+encoder.
+
+## Tags
+
+Four unrelated tagging schemes grew up around these formats. `readTagsFile`
+reads whichever one a file uses into the same shape, so a caller never has to
+know which.
+"""
+
+nbCode:
+  let tags = readTagsFile(Fixtures / "tagged.flac")
+  echo "title  ", tags.title
+  echo "artist ", tags.artist
+  echo "album  ", tags.album
+  echo "date   ", tags.date
+  echo "track  ", tags.trackNumber, " of ", tags.trackTotal
+
+nbText: """
+`date` is whatever the file wrote, kept as a string and not parsed. Tags carry
+`2019`, `2019-04-01` and worse; deciding which half of a bare `01/02/2019` is
+the month would be an invention, and the file does not answer it.
+
+A name with no field of its own is not dropped — it goes to `other`, under the
+name the file used.
+"""
+
+nbCode:
+  for (key, value) in tags.other:
+    echo key, " = ", value
+
+nbText: """
+## Recognising a recording by how it sounds
+
+The fingerprint is an acoustic one: it describes how a recording sounds, not
+what its bytes are. Two encodings of the same audio give nearly the same
+fingerprint, which is what makes it useful for finding duplicates no checksum
+would match.
+
+It works on the sound, so it needs the decode, not the file.
+"""
+
+nbCode:
+  let fromWave = fingerprint(readWaveFile(Fixtures / "sweep.wav"))
+  let fromFlac = fingerprint(decodeFile(Fixtures / "sweep.flac"))
+  echo "words: ", fromWave.words.len
+  echo "wav against flac: ", similarity(fromWave, fromFlac)
+
+nbText: """
+FLAC is lossless, so the two decodes are identical and the fingerprint matches
+exactly. A lossy encode moves it. How far depends on the material, and a pure
+sweep is the hardest case there is: almost all its energy sits in one band at a
+time, so a small change there flips many bits at once. Do not read the numbers
+below as what the fingerprint does to music.
+"""
+
+nbCode:
+  let fromMp3 = fingerprint(decodeFile(Fixtures / "sweep-mp3.mp3"))
+  let fromVorbis = fingerprint(decodeFile(Fixtures / "sweep-vorbis.ogg"))
+  echo "wav against mp3:    ", similarity(fromWave, fromMp3)
+  echo "wav against vorbis: ", similarity(fromWave, fromVorbis)
+
+nbText: """
+## What is deliberately absent
+
+There is no AAC decoder here, and there will not be one. The library implements
+formats nobody charges for: FLAC and Vorbis, royalty-free by design; ALAC,
+whose reference decoder Apple released under Apache 2.0, with the patent grant
+that licence carries; and MP3, whose last patents expired in 2017.
+
+A format it will not decode is named in the error rather than approximated:
+knowing a file is AAC and unsupported is something you can act on, "unsupported
+file" is not.
+
+The same rule decides what a recognised container may hold. An MP4 or an Ogg is
+read as a container either way, and the error names the codec found inside.
+
+## The other two surfaces
+
+The same library is a C ABI and a Python package. Both are thin: what the ABI
+cannot reach, the Python binding cannot reach either.
 
 ```c
-#define UNITEMPLATE_FIB_MAX_N 92
+#include "UniAudio.h"
 
-const char *uniaudio_version(void);
-long long   uniaudio_fibonacci(int n);
+int rate, channels;
+long long frames;
+if (uaud_probe("take.flac", &rate, &channels, &frames) != UAUD_OK)
+    fprintf(stderr, "%s\n", uaud_last_error());
 ```
-
-The C ABI **never raises**. Where the Nim function has a precondition, the C
-entry point clamps instead: out-of-range input returns a defined value rather
-than unwinding across the ABI boundary, which would be undefined behaviour.
-
-```c
-uniaudio_fibonacci(-5);   /* 0       — clamped, not a trap */
-uniaudio_fibonacci(200);  /* fib(92) — clamped to the domain */
-```
-
-## The Python surface
-
-A Cython extension over the C ABI, shipped as a self-contained wheel: the
-library travels inside the package, so installing it needs neither Nim nor a
-compiler.
 
 ```python
-import uniaudio
+from uniaudio import probe, tags
 
-uniaudio.fibonacci(10)   # 55
-uniaudio.version()       # '0.1.0'
+rate, channels, frames = probe("take.flac")
+print(tags("take.flac")["title"])
 ```
 
-Here the domain check returns, because Python has exceptions to carry it:
-`fibonacci(-1)` and `fibonacci(93)` raise `ValueError`, a non-`int` argument
-raises `TypeError`. Each surface expresses one contract in the terms its own
-callers expect — a precondition in Nim, a clamp in C, an exception in Python.
-
-`py/notebooks/quickstart.ipynb` runs these calls against an installed wheel and
-renders on GitHub directly.
-
-## Cloning this into an engine
-
-Rename the tokens (`UniAudio` → `UniFoo`, `uniaudio` → `unifoo`, `uaud_` →
-the engine's prefix), replace `fibonacci.nim` with the domain modules, then
-rewrite this book for the domain. The generated reference lists the API; the
-book is where the domain gets explained.
+No Nim exception crosses the C boundary: every entry point returns a status,
+with the reason available from `uaud_last_error`.
 """
 
 nbSave
