@@ -38,6 +38,7 @@ task test, "Nim tests (debug, contracts active)":
   exec "nim c -r --path:src -o:build/test_flac tests/test_flac.nim"
   exec "nim c -r --path:src -o:build/test_alac tests/test_alac.nim"
   exec "nim c -r --path:src -o:build/test_ogg tests/test_ogg.nim"
+  exec "nim c -r --path:src -o:build/test_vorbis tests/test_vorbis.nim"
   exec "nim c -r --path:src -o:build/test_fingerprint tests/test_fingerprint.nim"
 
 task testRelease, "Nim tests (release, contracts compiled away)":
@@ -46,6 +47,7 @@ task testRelease, "Nim tests (release, contracts compiled away)":
   exec "nim c -r -d:release --path:src -o:build/test_flac_rel tests/test_flac.nim"
   exec "nim c -r -d:release --path:src -o:build/test_alac_rel tests/test_alac.nim"
   exec "nim c -r -d:release --path:src -o:build/test_ogg_rel tests/test_ogg.nim"
+  exec "nim c -r -d:release --path:src -o:build/test_vorbis_rel tests/test_vorbis.nim"
   exec "nim c -r -d:release --path:src -o:build/test_fingerprint_rel tests/test_fingerprint.nim"
 
 task testCi, "Nim tests (CI subset, debug)":
@@ -54,6 +56,7 @@ task testCi, "Nim tests (CI subset, debug)":
   exec "nim c -r --path:src -o:build/test_flac tests/test_flac.nim"
   exec "nim c -r --path:src -o:build/test_alac tests/test_alac.nim"
   exec "nim c -r --path:src -o:build/test_ogg tests/test_ogg.nim"
+  exec "nim c -r --path:src -o:build/test_vorbis tests/test_vorbis.nim"
   exec "nim c -r --path:src -o:build/test_fingerprint tests/test_fingerprint.nim"
 
 task testCiRelease, "Nim tests (CI subset, release)":
@@ -62,6 +65,7 @@ task testCiRelease, "Nim tests (CI subset, release)":
   exec "nim c -r -d:release --path:src -o:build/test_flac_rel tests/test_flac.nim"
   exec "nim c -r -d:release --path:src -o:build/test_alac_rel tests/test_alac.nim"
   exec "nim c -r -d:release --path:src -o:build/test_ogg_rel tests/test_ogg.nim"
+  exec "nim c -r -d:release --path:src -o:build/test_vorbis_rel tests/test_vorbis.nim"
   exec "nim c -r -d:release --path:src -o:build/test_fingerprint_rel tests/test_fingerprint.nim"
 
 task testAll, "debug + release + C ABI":
