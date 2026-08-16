@@ -8,6 +8,7 @@
 ## amendment in the family structure document.
 import UniAudio/pcm
 import UniAudio/riff
-export pcm, riff
+import UniAudio/aiff
+export pcm, riff, aiff
 
 const UniAudioVersion* = "0.1.0"
