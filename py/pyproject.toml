@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 lituus-lab
+[build-system]
+requires = ["setuptools>=64", "wheel", "Cython>=3.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "uniaudio"
+version = "0.1.0"
+description = "Python binding for the UniAudio C library"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+authors = [{ name = "lbartoletti" }]
+keywords = ["nim", "c-extension", "template"]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Programming Language :: C",
+  "Topic :: Software Development :: Libraries",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/lituus-lab/UniAudio"
+Repository = "https://github.com/lituus-lab/UniAudio"
+Issues = "https://github.com/lituus-lab/UniAudio/issues"
+
+[project.optional-dependencies]
+test = ["pytest>=9.1.1"]
+
+[tool.setuptools]
+packages = ["uniaudio"]
