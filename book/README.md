@@ -2,5 +2,9 @@
 <!-- Copyright 2026 lituus-lab -->
 # The Book
 
-Placeholder for the nimib book each `Uni*` library carries. Replace with
-`book/docs/` pages for the domain when cloning; build with `nimble docs`.
+`index.nim` is the whole book: one nimib page, built by `nimble book` into
+`index.html`. Its code blocks are compiled and run at build time, so a change
+that breaks the API breaks the build instead of leaving the page wrong.
+
+The blocks read fixtures from `tests/fixtures` by relative path, so the build
+has to run from the repository root — which is what `nimble book` does.
