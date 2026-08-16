@@ -14,6 +14,7 @@ import ./pcm
 import ./riff
 import ./aiff
 import ./flac
+import ./alac
 
 type Container* = enum
   ## What a file turned out to be, decodable or not.
@@ -47,8 +48,11 @@ func sniff*(data: string): Container =
   acUnknown
 
 func decodes*(container: Container): bool =
-  ## Whether this build turns that container into samples.
-  container in {acWave, acAiff, acFlac}
+  ## Whether this build reads that container. An MP4 answers yes because the
+  ## container itself is read, but it can still carry a codec — AAC — that this
+  ## library will not decode; only opening it settles that, and the error then
+  ## names the codec found.
+  container in {acWave, acAiff, acFlac, acIsoBmff}
 
 proc decode*(data: string): AudioBuffer =
   ## Decode whatever the bytes turn out to be.
@@ -57,6 +61,7 @@ proc decode*(data: string): AudioBuffer =
   of acWave: readWave(newStringStream(data))
   of acAiff: readAiff(newStringStream(data))
   of acFlac: readFlac(data)
+  of acIsoBmff: readAlac(data)
   of acUnknown:
     raise newException(AudioError, "unrecognised audio container")
   else:

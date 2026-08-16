@@ -71,6 +71,11 @@ def test_sniff_names_a_container_this_build_cannot_decode(tmp_path):
     assert "mp3" in str(failure.value)
 
 
+def test_an_alac_m4a_probes_to_the_shape_of_the_wav_it_came_from():
+    assert sniff(FIXTURES / "sweep-alac.m4a") == "mp4"
+    assert probe(FIXTURES / "sweep-alac.m4a") == wave_probe(FIXTURES / "sweep.wav")
+
+
 def test_probe_agrees_with_the_wave_specific_one(tmp_path):
     path = write_wav(tmp_path / "take.wav", frames=256, rate=8000, channels=2)
     assert probe(path) == wave_probe(path)
