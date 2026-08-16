@@ -15,10 +15,11 @@ import UniAudio/alac
 import UniAudio/ogg
 import UniAudio/vorbis
 import UniAudio/mp3
+import UniAudio/tags
 import UniAudio/fft
 import UniAudio/fingerprint
 import UniAudio/decode
-export pcm, riff, aiff, flac, isobmff, alac, ogg, vorbis, mp3, fft,
+export pcm, riff, aiff, flac, isobmff, alac, ogg, vorbis, mp3, tags, fft,
   fingerprint, decode
 
 const UniAudioVersion* = "0.1.0"

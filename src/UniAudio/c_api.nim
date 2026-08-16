@@ -120,6 +120,75 @@ proc uaud_fingerprint(path: cstring; duration: ptr cdouble;
     lastError = getCurrentExceptionMsg()
     cint(uaudErrFormat)
 
+func jsonString(text: string): string =
+  ## Escaped by hand rather than through std/json: this library is compiled
+  ## --noMain, and anything needing a global initialiser would never run.
+  result = "\""
+  for character in text:
+    case character
+    of '"': result.add "\\\""
+    of '\\': result.add "\\\\"
+    of '\n': result.add "\\n"
+    of '\r': result.add "\\r"
+    of '\t': result.add "\\t"
+    else:
+      if character < ' ':
+        const Digits = "0123456789abcdef"
+        result.add "\\u00"
+        result.add Digits[int(uint8(character)) shr 4]
+        result.add Digits[int(uint8(character)) and 15]
+      else:
+        result.add character
+  result.add "\""
+
+proc uaud_tags_json(path: cstring; json: ptr cstring): cint
+                   {.exportc, cdecl, dynlib.} =
+  ## What the file says about itself, as a UTF-8 JSON object. The string is
+  ## allocated here and released with `uaud_free`.
+  ##
+  ## A file carrying no tags yields an object with empty fields, not an error:
+  ## having nothing to say is not a failure. `date` is whatever the file wrote,
+  ## unparsed, because tag dates follow no agreed format.
+  if path == nil or json == nil:
+    lastError = "path and json must be non-null"
+    return cint(uaudErrArg)
+  try:
+    let tags = readTagsFile($path)
+    var text = "{"
+    text.add "\"title\":" & jsonString(tags.title)
+    text.add ",\"artist\":" & jsonString(tags.artist)
+    text.add ",\"album\":" & jsonString(tags.album)
+    text.add ",\"albumArtist\":" & jsonString(tags.albumArtist)
+    text.add ",\"composer\":" & jsonString(tags.composer)
+    text.add ",\"genre\":" & jsonString(tags.genre)
+    text.add ",\"comment\":" & jsonString(tags.comment)
+    text.add ",\"date\":" & jsonString(tags.date)
+    text.add ",\"trackNumber\":" & $tags.trackNumber
+    text.add ",\"trackTotal\":" & $tags.trackTotal
+    text.add ",\"discNumber\":" & $tags.discNumber
+    text.add ",\"discTotal\":" & $tags.discTotal
+    text.add ",\"other\":["
+    for index, entry in tags.other:
+      if index > 0: text.add ","
+      text.add "{\"key\":" & jsonString(entry.key) &
+        ",\"value\":" & jsonString(entry.value) & "}"
+    text.add "]}"
+
+    let buffer = cast[cstring](alloc(text.len + 1))
+    copyMem(buffer, text.cstring, text.len + 1)
+    json[] = buffer
+    lastError = ""
+    cint(uaudOk)
+  except AudioError as error:
+    lastError = error.msg
+    cint(uaudErrFormat)
+  except IOError, OSError:
+    lastError = getCurrentExceptionMsg()
+    cint(uaudErrIo)
+  except CatchableError, Defect:
+    lastError = getCurrentExceptionMsg()
+    cint(uaudErrFormat)
+
 proc uaud_similarity(a: ptr uint32; aCount: cint; b: ptr uint32;
                      bCount: cint): cdouble {.exportc, cdecl, dynlib.} =
   ## How alike two fingerprints are, in [0, 1]. Two empty fingerprints are

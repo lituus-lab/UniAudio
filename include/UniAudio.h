@@ -59,6 +59,16 @@ int uaud_probe(const char *path, int *sample_rate, int *channels,
 /* Release a buffer this library allocated. NULL is accepted. */
 void uaud_free(void *buffer);
 
+/* What the file says about itself, as a UTF-8 JSON object: title, artist,
+ * album, albumArtist, composer, genre, comment and date as strings,
+ * trackNumber, trackTotal, discNumber and discTotal as numbers, and other as
+ * an array of {key, value} for names with no field of their own. The string is
+ * allocated by the library and released with uaud_free.
+ *
+ * A file carrying no tags yields empty fields, not an error. date is whatever
+ * the file wrote, unparsed: tag dates follow no agreed format. */
+int uaud_tags_json(const char *path, char **json);
+
 /* Fingerprint a file: one 32-bit word per frame, in time order. The words are
  * allocated by the library and released with uaud_free. A recording too short
  * to compare yields a count of zero and a NULL pointer, not an error. */
