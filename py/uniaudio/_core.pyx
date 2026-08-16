@@ -6,6 +6,8 @@
 A thin wrapper, never a second implementation: what the ABI cannot reach, this
 cannot reach either.
 """
+import json as _json
+
 from libc.stdint cimport uint32_t
 from libc.stdlib cimport malloc, free
 
@@ -17,6 +19,7 @@ cdef extern from "UniAudio.h":
     int uaud_probe(const char *path, int *sample_rate, int *channels,
                    long long *frames)
     void uaud_free(void *buffer)
+    int uaud_tags_json(const char *path, char **json)
     int uaud_fingerprint(const char *path, double *duration,
                          unsigned int **words, int *count)
     double uaud_similarity(const unsigned int *a, int a_count,
@@ -48,6 +51,24 @@ def wave_probe(path):
         raise UniAudioError(status,
                             uaud_last_error().decode("utf-8", "replace"))
     return rate, channels, frames
+
+
+def tags(path):
+    """What the file says about itself, as a dict.
+
+    `date` is whatever the file wrote and is not parsed: tag dates follow no
+    agreed format. Names with no field of their own are under `other`.
+    """
+    cdef bytes encoded = str(path).encode("utf-8")
+    cdef char *out = NULL
+    cdef int status = uaud_tags_json(encoded, &out)
+    if status != 0:
+        raise UniAudioError(status,
+                            uaud_last_error().decode("utf-8", "replace"))
+    try:
+        return _json.loads((<bytes> out).decode("utf-8"))
+    finally:
+        uaud_free(out)
 
 
 def sniff(path):

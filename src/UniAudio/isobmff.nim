@@ -49,7 +49,7 @@ proc beU64(data: string; offset: int): int64 =
   for index in 0 .. 7:
     result = (result shl 8) or int64(uint8(data[offset + index]))
 
-iterator boxes(data: string; start, limit: int): tuple[kind: string;
+iterator boxes*(data: string; start, limit: int): tuple[kind: string;
     body, bodyEnd: int] =
   ## Each box between `start` and `limit`, as its kind and the span of its
   ## payload. A size of 0 means "to the end"; 1 means a 64-bit size follows.
@@ -68,8 +68,8 @@ iterator boxes(data: string; start, limit: int): tuple[kind: string;
     yield (kind, offset + header, offset + int(size))
     offset += int(size)
 
-proc findBox(data: string; start, limit: int; path: openArray[string];
-             depth = 0): tuple[body, bodyEnd: int] =
+proc findBox*(data: string; start, limit: int; path: openArray[string];
+              depth = 0): tuple[body, bodyEnd: int] =
   ## Walk a path of box kinds, e.g. ["moov", "trak", "mdia"]. Returns
   ## (-1, -1) when any step is missing.
   if depth > MaxBoxDepth or path.len == 0: return (-1, -1)

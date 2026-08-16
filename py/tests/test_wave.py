@@ -7,7 +7,7 @@ import struct
 import pytest
 
 from uniaudio import (UniAudioError, fingerprint, probe, similarity, sniff,
-                      version, wave_probe)
+                      tags, version, wave_probe)
 
 FIXTURES = pathlib.Path(__file__).resolve().parents[2] / "tests" / "fixtures"
 
@@ -106,3 +106,25 @@ def test_something_too_short_fingerprints_to_nothing(tmp_path):
 def test_similarity_of_nothing_is_zero():
     assert similarity([], []) == 0.0
     assert similarity([1, 2, 3], []) == 0.0
+
+
+def test_tags_come_back_as_a_dict_with_the_values_the_file_carries():
+    result = tags(FIXTURES / "tagged-v24.mp3")
+    assert result["title"] == "Été à Nice"
+    assert result["artist"] == "Lituus Lab"
+    assert result["trackNumber"] == 3
+    assert result["trackTotal"] == 12
+    # The date is whatever the file wrote, not a parsed date object.
+    assert result["date"] == "2026"
+
+
+def test_a_file_with_no_tags_reads_as_empty_fields_not_an_error():
+    result = tags(FIXTURES / "sweep.wav")
+    assert result["title"] == ""
+    assert result["trackNumber"] == 0
+    assert result["other"] == []
+
+
+def test_a_name_with_no_field_of_its_own_is_kept():
+    result = tags(FIXTURES / "tagged.flac")
+    assert any(entry["key"] == "ENCODER" for entry in result["other"])

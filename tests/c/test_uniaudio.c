@@ -43,6 +43,30 @@ static void write_wav(const char *path, int frames) {
   fclose(f);
 }
 
+/* Four bytes of frame sync so the file reads as MPEG audio, padding, then a
+ * 128-byte ID3v1 tag: "TAG", 30 title, 30 artist, 30 album, 4 year,
+ * 30 comment, 1 genre. */
+static void write_id3v1(const char *path, const char *title,
+                        const char *artist, const char *year) {
+  FILE *f = fopen(path, "wb");
+  assert(f != NULL);
+  fputc(0xFF, f);
+  fputc(0xFB, f);
+  fputc(0x90, f);
+  fputc(0x00, f);
+  for (int i = 0; i < 60; i++) fputc(0, f);
+
+  char tag[128];
+  memset(tag, 0, sizeof tag);
+  memcpy(tag, "TAG", 3);
+  memcpy(tag + 3, title, strlen(title));
+  memcpy(tag + 33, artist, strlen(artist));
+  memcpy(tag + 93, year, 4);
+  tag[127] = (char)255; /* no genre */
+  fwrite(tag, 1, sizeof tag, f);
+  fclose(f);
+}
+
 int main(void) {
   assert(strcmp(uaud_version(), UNIAUDIO_VERSION) == 0);
   assert(UNIAUDIO_VERSION_AT_LEAST(0, 1, 0));
@@ -116,6 +140,31 @@ int main(void) {
     assert(partial > 0.666 && partial < 0.667);
   }
 
+  /* Tags come back as JSON the caller frees. An ID3v1 tag is 128 fixed-width
+   * bytes at the end of the file, so one can be built here without a fixture:
+   * a frame sync so the file reads as MPEG audio, padding, then the tag. */
+  char tagged[512];
+  snprintf(tagged, sizeof tagged, "%suniaudio_capi_tags.mp3", tmp ? tmp : "/tmp/");
+  write_id3v1(tagged, "probe title", "probe artist", "2001");
+
+  char *json = NULL;
+  assert(uaud_tags_json(tagged, &json) == UAUD_OK);
+  assert(json != NULL);
+  assert(strstr(json, "\"title\":\"probe title\"") != NULL);
+  assert(strstr(json, "\"artist\":\"probe artist\"") != NULL);
+  assert(strstr(json, "\"date\":\"2001\"") != NULL);
+  uaud_free(json);
+
+  /* A file with nothing to say is not a failure. */
+  json = NULL;
+  assert(uaud_tags_json(path, &json) == UAUD_OK);
+  assert(strstr(json, "\"title\":\"\"") != NULL);
+  assert(strstr(json, "\"trackNumber\":0") != NULL);
+  uaud_free(json);
+
+  assert(uaud_tags_json(NULL, &json) == UAUD_ERR_ARG);
+
+  remove(tagged);
   remove(path);
   remove(other);
   printf("c abi: ok\n");
