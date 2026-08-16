@@ -12,6 +12,7 @@ import UniAudio/aiff
 import UniAudio/flac
 import UniAudio/fft
 import UniAudio/fingerprint
-export pcm, riff, aiff, flac, fft, fingerprint
+import UniAudio/decode
+export pcm, riff, aiff, flac, fft, fingerprint, decode
 
 const UniAudioVersion* = "0.1.0"

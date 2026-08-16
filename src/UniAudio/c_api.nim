@@ -28,6 +28,110 @@ proc uaud_last_error(): cstring {.exportc, cdecl, dynlib.} =
   ## library; valid until the next failing call on the same thread.
   lastError.cstring
 
+proc uaud_container_name(container: cint): cstring {.exportc, cdecl, dynlib.} =
+  ## Name of a container code, or "unknown" for one this build has no name for.
+  ## Static; do not free.
+  # String literals, not a table built at module scope: this library is
+  # compiled --noMain, so no global initialiser ever runs.
+  case container
+  of 1: cstring"wav"
+  of 2: cstring"aiff"
+  of 3: cstring"flac"
+  of 4: cstring"ogg"
+  of 5: cstring"mp3"
+  of 6: cstring"mp4"
+  else: cstring"unknown"
+
+proc uaud_sniff(path: cstring; container: ptr cint): cint
+               {.exportc, cdecl, dynlib.} =
+  ## Identify a file from its leading bytes, without decoding it.
+  if path == nil or container == nil:
+    lastError = "path and container must be non-null"
+    return cint(uaudErrArg)
+  try:
+    container[] = cint(ord(sniffFile($path)))
+    lastError = ""
+    cint(uaudOk)
+  except IOError, OSError:
+    lastError = getCurrentExceptionMsg()
+    cint(uaudErrIo)
+  except CatchableError, Defect:
+    lastError = getCurrentExceptionMsg()
+    cint(uaudErrFormat)
+
+proc uaud_probe(path: cstring; sampleRate, channels: ptr cint;
+                frames: ptr clonglong): cint {.exportc, cdecl, dynlib.} =
+  ## Shape of any container this build decodes. A container it recognises but
+  ## does not decode is named in `uaud_last_error`, not silently skipped.
+  if path == nil or sampleRate == nil or channels == nil or frames == nil:
+    lastError = "path and every output pointer must be non-null"
+    return cint(uaudErrArg)
+  try:
+    let buffer = decodeFile($path)
+    sampleRate[] = cint(buffer.format.sampleRate)
+    channels[] = cint(buffer.format.channels)
+    frames[] = clonglong(buffer.format.frames)
+    lastError = ""
+    cint(uaudOk)
+  except AudioError as error:
+    lastError = error.msg
+    cint(uaudErrFormat)
+  except IOError, OSError:
+    lastError = getCurrentExceptionMsg()
+    cint(uaudErrIo)
+  except CatchableError, Defect:
+    lastError = getCurrentExceptionMsg()
+    cint(uaudErrFormat)
+
+proc uaud_free(buffer: pointer) {.exportc, cdecl, dynlib.} =
+  ## Release a buffer this library allocated. NULL is accepted.
+  if buffer != nil: dealloc(buffer)
+
+proc uaud_fingerprint(path: cstring; duration: ptr cdouble;
+                      words: ptr ptr uint32; count: ptr cint): cint
+                     {.exportc, cdecl, dynlib.} =
+  ## Fingerprint a file. The words are allocated here and released with
+  ## `uaud_free`; a recording too short to compare yields a count of zero and
+  ## a null pointer, not an error.
+  if path == nil or duration == nil or words == nil or count == nil:
+    lastError = "path and every output pointer must be non-null"
+    return cint(uaudErrArg)
+  try:
+    let print = fingerprint(decodeFile($path))
+    duration[] = cdouble(print.durationSeconds)
+    count[] = cint(print.words.len)
+    if print.words.len == 0:
+      words[] = nil
+    else:
+      let bytes = print.words.len * sizeof(uint32)
+      let buffer = cast[ptr UncheckedArray[uint32]](alloc(bytes))
+      for index in 0 ..< print.words.len:
+        buffer[index] = print.words[index]
+      words[] = cast[ptr uint32](buffer)
+    lastError = ""
+    cint(uaudOk)
+  except AudioError as error:
+    lastError = error.msg
+    cint(uaudErrFormat)
+  except IOError, OSError:
+    lastError = getCurrentExceptionMsg()
+    cint(uaudErrIo)
+  except CatchableError, Defect:
+    lastError = getCurrentExceptionMsg()
+    cint(uaudErrFormat)
+
+proc uaud_similarity(a: ptr uint32; aCount: cint; b: ptr uint32;
+                     bCount: cint): cdouble {.exportc, cdecl, dynlib.} =
+  ## How alike two fingerprints are, in [0, 1]. Two empty fingerprints are
+  ## not alike: they are unknown, which reads as 0.
+  if a == nil or b == nil or aCount <= 0 or bCount <= 0: return 0.0
+  var left, right: Fingerprint
+  let leftArray = cast[ptr UncheckedArray[uint32]](a)
+  let rightArray = cast[ptr UncheckedArray[uint32]](b)
+  for index in 0 ..< int(aCount): left.words.add leftArray[index]
+  for index in 0 ..< int(bCount): right.words.add rightArray[index]
+  cdouble(similarity(left, right))
+
 proc uaud_wave_probe(path: cstring; sampleRate, channels: ptr cint;
                      frames: ptr clonglong): cint {.exportc, cdecl, dynlib.} =
   ## Shape of a RIFF/WAVE file, without keeping the samples.

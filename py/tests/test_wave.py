@@ -1,11 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 lituus-lab
 """The Python surface over the C ABI, exercised against real files."""
+import pathlib
 import struct
 
 import pytest
 
-from uniaudio import UniAudioError, version, wave_probe
+from uniaudio import (UniAudioError, fingerprint, probe, similarity, sniff,
+                      version, wave_probe)
+
+FIXTURES = pathlib.Path(__file__).resolve().parents[2] / "tests" / "fixtures"
 
 
 def write_wav(path, frames=400, rate=8000, channels=1):
@@ -49,3 +53,46 @@ def test_a_file_that_is_not_a_wave_raises_rather_than_guessing(tmp_path):
 def test_a_missing_file_raises(tmp_path):
     with pytest.raises(UniAudioError):
         wave_probe(tmp_path / "absent.wav")
+
+
+def test_sniff_names_the_container_without_decoding(tmp_path):
+    path = write_wav(tmp_path / "take.wav")
+    assert sniff(path) == "wav"
+    assert sniff(FIXTURES / "sweep.flac") == "flac"
+
+
+def test_sniff_names_a_container_this_build_cannot_decode(tmp_path):
+    # An MP3 frame sync: recognised, and said so, rather than called unknown.
+    path = tmp_path / "song.mp3"
+    path.write_bytes(b"\xff\xfb\x90\x00" + b"\x00" * 64)
+    assert sniff(path) == "mp3"
+    with pytest.raises(UniAudioError) as failure:
+        probe(path)
+    assert "mp3" in str(failure.value)
+
+
+def test_probe_agrees_with_the_wave_specific_one(tmp_path):
+    path = write_wav(tmp_path / "take.wav", frames=256, rate=8000, channels=2)
+    assert probe(path) == wave_probe(path)
+
+
+def test_a_fingerprint_matches_itself_and_survives_re_encoding():
+    duration, words = fingerprint(FIXTURES / "sweep.wav")
+    assert duration == pytest.approx(3.0)
+    assert len(words) > 0
+    assert similarity(words, words) == pytest.approx(1.0)
+    # The same samples through FLAC must fingerprint identically.
+    _, from_flac = fingerprint(FIXTURES / "sweep.flac")
+    assert words == from_flac
+
+
+def test_something_too_short_fingerprints_to_nothing(tmp_path):
+    path = write_wav(tmp_path / "brief.wav", frames=400)
+    duration, words = fingerprint(path)
+    assert words == []
+    assert duration == pytest.approx(0.05)
+
+
+def test_similarity_of_nothing_is_zero():
+    assert similarity([], []) == 0.0
+    assert similarity([1, 2, 3], []) == 0.0
