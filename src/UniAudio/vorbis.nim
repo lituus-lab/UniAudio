@@ -17,7 +17,7 @@
 ## representation no encoder has emitted since 2004, and decoding it wrongly
 ## would sound like audio rather than like an error.
 
-import std/math
+import UniMath/native_float
 import ./pcm
 import ./fft
 import ./ogg

@@ -11,7 +11,8 @@
 ## variants are decoded; a compressed one is reported by name rather than
 ## approximated.
 
-import std/[math, streams]
+import std/streams
+import UniMath/native_float
 import contracts
 import ./pcm
 

@@ -9,7 +9,7 @@
 ## chooses, a waveform wants peaks, and neither should care that one file was
 ## FLAC and the next WAV.
 
-import std/math
+import UniMath/native_float
 import contracts
 
 type

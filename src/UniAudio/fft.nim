@@ -10,7 +10,7 @@
 ## Iterative Cooley-Tukey with bit reversal, in place. Lengths must be powers
 ## of two: an audio frame size is chosen, not given.
 
-import std/math
+import UniMath/native_float
 import contracts
 
 type Complex* = object
