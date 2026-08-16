@@ -184,6 +184,6 @@ proc readAiffFile*(path: string): AudioBuffer {.contractual.} =
   body:
     let stream = newFileStream(path, fmRead)
     if stream == nil:
-      raise newException(AudioError, "aiff: cannot open " & path)
+      raise newException(IOError, "aiff: cannot open " & path)
     defer: stream.close()
     readAiff(stream)

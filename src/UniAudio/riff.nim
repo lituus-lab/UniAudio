@@ -168,7 +168,7 @@ proc readWaveFile*(path: string): AudioBuffer {.contractual.} =
   body:
     let stream = newFileStream(path, fmRead)
     if stream == nil:
-      raise newException(AudioError, "wav: cannot open " & path)
+      raise newException(IOError, "wav: cannot open " & path)
     defer: stream.close()
     readWave(stream)
 
@@ -221,6 +221,6 @@ proc writeWaveFile*(path: string; buffer: AudioBuffer; bitsPerSample = 16)
   body:
     let stream = newFileStream(path, fmWrite)
     if stream == nil:
-      raise newException(AudioError, "wav: cannot write " & path)
+      raise newException(IOError, "wav: cannot write " & path)
     defer: stream.close()
     writeWave(stream, buffer, bitsPerSample)

@@ -423,6 +423,17 @@ func halfWindow(size: int): seq[float32] =
     let inner = sin((float(index) + 0.5) / float(half) * 0.5 * PI)
     result[index] = float32(sin(0.5 * PI * inner * inner))
 
+func oggCodecName(packet: string): string =
+  ## What an Ogg stream turned out to carry. Every codec that rides in Ogg
+  ## marks its first packet, so a stream that is not Vorbis can say what it is
+  ## instead of only saying what it is not.
+  if packet.len >= 8 and packet[0 .. 7] == "OpusHead": "opus"
+  elif packet.len >= 5 and packet[1 .. 4] == "FLAC": "flac"
+  elif packet.len >= 8 and packet[0 .. 7] == "Speex   ": "speex"
+  elif packet.len >= 7 and packet[1 .. 6] == "theora": "theora"
+  elif packet.len >= 7 and packet[1 .. 6] == "vorbis": "vorbis"
+  else: ""
+
 proc readHeaders(packets: seq[OggPacket]): VorbisSetup =
   if packets.len < 3:
     raise newException(AudioError, "vorbis: the three headers are not all there")
@@ -430,8 +441,12 @@ proc readHeaders(packets: seq[OggPacket]): VorbisSetup =
     if packets[index].data.len < 7 or
         uint8(packets[index].data[0]) != expected or
         packets[index].data[1 .. 6] != "vorbis":
+      let found = oggCodecName(packets[0].data)
       raise newException(AudioError,
-        "vorbis: header " & $(index + 1) & " is not one")
+        if found.len > 0 and found != "vorbis":
+          "ogg: the stream is " & found & ", not vorbis"
+        else:
+          "vorbis: header " & $(index + 1) & " is malformed")
 
   var identification = initReader(packets[0].data[7 .. ^1])
   if identification.read(32) != 0:

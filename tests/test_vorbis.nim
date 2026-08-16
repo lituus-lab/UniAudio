@@ -67,7 +67,7 @@ suite "vorbis refuses what it cannot decode":
       discard readVorbisFile(Fixtures / "sweep-oggflac.ogg")
     except AudioError as failure:
       reason = failure.msg
-    check reason.contains("header")
+    check reason.contains("flac")
 
   test "bytes that are not an Ogg file at all":
     expect AudioError:

@@ -50,9 +50,13 @@ def test_a_file_that_is_not_a_wave_raises_rather_than_guessing(tmp_path):
     assert str(failure.value)
 
 
-def test_a_missing_file_raises(tmp_path):
-    with pytest.raises(UniAudioError):
-        wave_probe(tmp_path / "absent.wav")
+def test_a_missing_file_is_an_io_failure_not_a_format_one(tmp_path):
+    # The status codes exist to be acted on: a file that is not there is a
+    # different problem from a file whose bytes are wrong.
+    for call in (wave_probe, probe):
+        with pytest.raises(UniAudioError) as failure:
+            call(tmp_path / "absent.wav")
+        assert failure.value.status == 2
 
 
 def test_sniff_names_the_container_without_decoding(tmp_path):
