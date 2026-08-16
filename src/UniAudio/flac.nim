@@ -377,6 +377,6 @@ proc readFlacFile*(path: string): AudioBuffer {.contractual.} =
   body:
     let stream = newFileStream(path, fmRead)
     if stream == nil:
-      raise newException(AudioError, "flac: cannot open " & path)
+      raise newException(IOError, "flac: cannot open " & path)
     defer: stream.close()
     readFlac(stream.readAll())

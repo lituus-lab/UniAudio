@@ -75,7 +75,7 @@ proc decodeFile*(path: string): AudioBuffer {.contractual.} =
   body:
     let stream = newFileStream(path, fmRead)
     if stream == nil:
-      raise newException(AudioError, "cannot open " & path)
+      raise newException(IOError, "cannot open " & path)
     defer: stream.close()
     decode(stream.readAll())
 
@@ -86,6 +86,6 @@ proc sniffFile*(path: string): Container {.contractual.} =
   body:
     let stream = newFileStream(path, fmRead)
     if stream == nil:
-      raise newException(AudioError, "cannot open " & path)
+      raise newException(IOError, "cannot open " & path)
     defer: stream.close()
     sniff(stream.readStr(16))
