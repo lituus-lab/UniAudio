@@ -8,7 +8,8 @@ Audio containers, patent-free decoders and acoustic fingerprinting::
 
     rate, channels, frames = wave_probe("take.wav")
 """
-from ._core import UniAudioError, wave_probe, version as _version_c
+from ._core import (UniAudioError, fingerprint, probe, similarity, sniff,
+                    wave_probe, version as _version_c)
 
 __version__ = _version_c().decode("ascii")
 
@@ -18,4 +19,5 @@ def version():
     return _version_c().decode("ascii")
 
 
-__all__ = ["UniAudioError", "wave_probe", "version", "__version__"]
+__all__ = ["UniAudioError", "fingerprint", "probe", "similarity", "sniff",
+           "wave_probe", "version", "__version__"]
