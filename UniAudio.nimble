@@ -34,15 +34,19 @@ task docs, "API reference + book into pages/ — what CI publishes":
 
 task test, "Nim tests (debug, contracts active)":
   exec "nim c -r --path:src -o:build/test_pcm tests/test_pcm.nim"
+  exec "nim c -r --path:src -o:build/test_aiff tests/test_aiff.nim"
 
 task testRelease, "Nim tests (release, contracts compiled away)":
   exec "nim c -r -d:release --path:src -o:build/test_pcm_rel tests/test_pcm.nim"
+  exec "nim c -r -d:release --path:src -o:build/test_aiff_rel tests/test_aiff.nim"
 
 task testCi, "Nim tests (CI subset, debug)":
   exec "nim c -r --path:src -o:build/test_pcm tests/test_pcm.nim"
+  exec "nim c -r --path:src -o:build/test_aiff tests/test_aiff.nim"
 
 task testCiRelease, "Nim tests (CI subset, release)":
   exec "nim c -r -d:release --path:src -o:build/test_pcm_rel tests/test_pcm.nim"
+  exec "nim c -r -d:release --path:src -o:build/test_aiff_rel tests/test_aiff.nim"
 
 task testAll, "debug + release + C ABI":
   exec "nimble test"
