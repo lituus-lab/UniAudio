@@ -12,7 +12,7 @@
 ## carries: block size, channel count and bit depth all come from a header a
 ## damaged or hostile file controls.
 
-import std/[streams, md5]
+import std/[streams, md5, math]
 import contracts
 import ./pcm
 
@@ -648,7 +648,9 @@ proc writeFlac*(buffer: AudioBuffer; bitsPerSample = 16): string
     var quantised = newSeq[int64](frames * channels)
     var raw = newStringOfCap(frames * channels * (bitsPerSample div 8))
     for index in 0 ..< frames * channels:
-      var scaled = float32(buffer.samples[index]) * peak
+      # Round, then clamp. Truncating instead would cost up to a whole step and
+      # pull every sample towards silence, because it always rounds inwards.
+      var scaled = round(float32(buffer.samples[index]) * peak)
       if scaled > peak - 1: scaled = peak - 1
       if scaled < -peak: scaled = -peak
       let value = int64(scaled)
