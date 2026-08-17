@@ -138,23 +138,42 @@ proc decodeResidual(reader: var BitReader; order, blockSize: int;
         output[index] = cast[int64]((folded shr 1) xor (0'u64 - (folded and 1)))
         inc index
 
-proc restoreFixed(output: var seq[int64]; order, blockSize: int) =
+func fitsIn(value: int64; bits: int): bool =
+  ## Whether a reconstructed sample is one: `bits` is the width the frame
+  ## declared, and anything wider came from a corrupt stream.
+  if bits >= 64: return true
+  let limit = 1'i64 shl (bits - 1)
+  value >= -limit and value < limit
+
+proc restoreFixed(output: var seq[int64]; order, blockSize, bits: int) =
   ## The fixed polynomial predictors, orders 0 to 4.
+  ##
+  ## Each sample feeds the next, so a corrupt residual compounds; the width
+  ## check stops that before the arithmetic overflows.
+  template guard(index: int) =
+    if not fitsIn(output[index], bits):
+      raise newException(AudioError,
+        "flac: reconstructed sample does not fit " & $bits & " bits")
   case order
   of 0: discard
   of 1:
-    for index in 1 ..< blockSize: output[index] += output[index - 1]
+    for index in 1 ..< blockSize:
+      output[index] += output[index - 1]
+      guard(index)
   of 2:
     for index in 2 ..< blockSize:
       output[index] += 2 * output[index - 1] - output[index - 2]
+      guard(index)
   of 3:
     for index in 3 ..< blockSize:
       output[index] += 3 * output[index - 1] - 3 * output[index - 2] +
         output[index - 3]
+      guard(index)
   of 4:
     for index in 4 ..< blockSize:
       output[index] += 4 * output[index - 1] - 6 * output[index - 2] +
         4 * output[index - 3] - output[index - 4]
+      guard(index)
   else:
     raise newException(AudioError, "flac: fixed order above 4")
 
@@ -179,7 +198,7 @@ proc decodeSubframe(reader: var BitReader; blockSize, bitsPerSample: int;
     let order = kind - 8
     for index in 0 ..< order: output[index] = reader.readSigned(bits)
     decodeResidual(reader, order, blockSize, output)
-    restoreFixed(output, order, blockSize)
+    restoreFixed(output, order, blockSize, bits)
   elif kind >= 32: # LPC
     let order = kind - 31
     if order > MaxLpcOrder:
@@ -200,6 +219,12 @@ proc decodeSubframe(reader: var BitReader; blockSize, bitsPerSample: int;
       for tap in 0 ..< order:
         sum += coefficients[tap] * output[index - 1 - tap]
       output[index] += sum shr shift
+      # A reconstructed sample is a sample: it fits the declared width. Left
+      # unchecked, a corrupt residual feeds back through this recursion and
+      # grows without bound until the multiply above overflows.
+      if not fitsIn(output[index], bits):
+        raise newException(AudioError,
+          "flac: reconstructed sample does not fit " & $bits & " bits")
   else:
     raise newException(AudioError, "flac: reserved subframe type " & $kind)
 
