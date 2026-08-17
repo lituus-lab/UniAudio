@@ -10,7 +10,7 @@
 ## is checked against a ceiling and against what the file actually holds before
 ## a single byte is allocated.
 
-import std/[streams, strutils]
+import std/[streams, strutils, math]
 import contracts
 import ./pcm
 
@@ -212,7 +212,9 @@ proc writeWave*(stream: Stream; buffer: AudioBuffer; bitsPerSample = 16)
     stream.writeU32(dataBytes)
     let peak = float32(1 shl (bitsPerSample - 1))
     for sample in buffer.samples:
-      var scaled = sample * peak
+      # Round, then clamp. Truncating instead would cost up to a whole step and
+      # pull every sample towards silence, because it always rounds inwards.
+      var scaled = round(sample * peak)
       if scaled > peak - 1: scaled = peak - 1
       if scaled < -peak: scaled = -peak
       let value = int32(scaled)
