@@ -97,3 +97,5 @@ proc powerSpectrum*(samples: openArray[float32];
     for index in 0 ..< result.len:
       result[index] = values[index].re * values[index].re +
         values[index].im * values[index].im
+
+

@@ -224,3 +224,5 @@ proc writeWaveFile*(path: string; buffer: AudioBuffer; bitsPerSample = 16)
       raise newException(IOError, "wav: cannot write " & path)
     defer: stream.close()
     writeWave(stream, buffer, bitsPerSample)
+
+
