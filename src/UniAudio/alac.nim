@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 lituus-lab
-## Apple Lossless, decoded.
+## Apple Lossless, read and written.
 ##
 ## Ported from Apple's reference implementation, which is Apache-2.0 — the
 ## same licence as this library, so the arithmetic below follows it rather
@@ -9,12 +9,18 @@
 ## Two stages per channel. An adaptive Golomb-Rice decoder turns the bitstream
 ## into prediction residuals while tracking a running mean that sets each code
 ## length; then an adaptive FIR predictor rebuilds the samples, moving its own
-## coefficients by the sign of each error as it goes, so the filter is never
-## transmitted. Stereo arrives as a weighted mid/side pair whose weights the
-## frame carries.
+## coefficients by the sign of each error as it goes, so no coefficient update
+## is ever transmitted. Stereo arrives as a weighted mid/side pair whose
+## weights the frame carries.
+##
+## The encoder is those stages inverted, in the same order, with the reference
+## encoder's parameters. It reaches the samples through `isobmff`, which builds
+## the MP4 the frames travel in.
 
+import std/math
 import contracts
 import ./pcm
+import ./bitio
 import ./isobmff
 
 const
@@ -392,5 +398,352 @@ proc readAlacFile*(path: string): AudioBuffer {.contractual.} =
     path.len > 0
   body:
     readAlac(readFile(path))
+
+# --- encoding ---
+#
+# Every stage above, run backwards, with the reference encoder's parameters:
+# eight predictor taps at a denominator shift of 9, a mid/side weight searched
+# over the five values Apple's encoder tries, and the same running-mean Golomb
+# coder. Each frame carries its own starting coefficients, so the decoder needs
+# nothing remembered between frames; carrying them here is only a better place
+# for the next frame to start from than the seed.
+
+const
+  AInit = 38
+  BInit = -29
+  CInit = -2
+  DenShiftDefault = 9
+  DefaultMixBits = 2
+  MaxMixRes = 4
+  DefaultTaps = 8
+  PB0 = 40
+  MB0 = 10
+  KB0 = 14
+  MaxRunDefault = 255
+  EncodeFrameLength = 4096
+  IdSingle = 0 ## one channel
+  IdPair = 1   ## a channel pair
+  IdEnd = 7    ## no more elements in this frame
+
+func initCoefficients(taps: int): seq[int16] =
+  ## The reference's seed filter: roughly a first difference, zero beyond.
+  result = newSeq[int16](taps)
+  let den = 1 shl DenShiftDefault
+  result[0] = int16((AInit * den) shr 4)
+  result[1] = int16((BInit * den) shr 4)
+  result[2] = int16((CInit * den) shr 4)
+
+func nudge(coefficient: var int16; delta: int) =
+  ## The coefficients travel as 16-bit values, so they wrap where C's would.
+  coefficient = cast[int16](uint16(int(coefficient) + delta))
+
+proc predict(input: openArray[int]; output: var seq[int]; count: int;
+             coefficients: var seq[int16]; active, chanBits, denShift: int) =
+  ## The adaptive FIR predictor: `unpredict`'s exact inverse. It adapts from the
+  ## same signs in the same order, so the decoder's copy of the filter tracks
+  ## this one without a single coefficient update being transmitted.
+  template clip(value: int): int = signExtend(value, chanBits)
+
+  output[0] = input[0]
+  if active == 0:
+    for index in 1 ..< count: output[index] = input[index]
+    return
+  if active == 31:
+    for index in 1 ..< count:
+      output[index] = clip(input[index] - input[index - 1])
+    return
+
+  for index in 1 .. min(active, count - 1):
+    output[index] = clip(input[index] - input[index - 1])
+
+  let denHalf = if denShift > 0: 1 shl (denShift - 1) else: 0
+  for index in active + 1 ..< count:
+    let top = input[index - active - 1]
+    var sum = 0
+    for tap in 0 ..< active:
+      sum += int(coefficients[tap]) * (input[index - 1 - tap] - top)
+    let error = clip(input[index] - top - ((sum + denHalf) shr denShift))
+    output[index] = error
+
+    var remaining = error
+    if error > 0:
+      for tap in countdown(active - 1, 0):
+        let difference = top - input[index - 1 - tap]
+        let sgn = signOf(difference)
+        coefficients[tap].nudge(-sgn)
+        remaining -= (active - tap) * ((sgn * difference) shr denShift)
+        if remaining <= 0: break
+    elif error < 0:
+      for tap in countdown(active - 1, 0):
+        let difference = top - input[index - 1 - tap]
+        let sgn = signOf(difference)
+        coefficients[tap].nudge(sgn)
+        remaining -= (active - tap) * ((-sgn * difference) shr denShift)
+        if remaining >= 0: break
+
+proc dynCode(writer: var BitWriter; m, k, n: int) =
+  ## A zero-run length. Past a prefix of nine the run goes out flat in sixteen
+  ## bits, which also covers the case where the coded form would be longer.
+  const escapeBits = MaxPrefix16 + MaxDatatypeBits16
+  template escape =
+    writer.put(uint64(((1 shl MaxPrefix16) - 1) shl MaxDatatypeBits16) +
+      uint64(n), escapeBits)
+  if m <= 0:
+    escape
+    return
+  let quotient = n div m
+  if quotient >= MaxPrefix16:
+    escape
+    return
+  let remainder = n mod m
+  let exact = if remainder == 0: 1 else: 0
+  let bits = quotient + k + 1 - exact
+  if bits > escapeBits:
+    escape
+  else:
+    writer.put(uint64(((1 shl quotient) - 1) shl (bits - quotient)) +
+      uint64(remainder + 1 - exact), bits)
+
+proc dynCode32(writer: var BitWriter; m, k, n, maxBits: int) =
+  ## One residual. The prefix is capped at nine ones, after which the value
+  ## follows flat in `maxBits` bits — the escape `dynGet32` expects.
+  template escape =
+    writer.put(uint64((1 shl MaxPrefix32) - 1), MaxPrefix32)
+    writer.put(uint64(n), maxBits)
+  if m <= 0:
+    escape
+    return
+  let quotient = n div m
+  if quotient >= MaxPrefix32:
+    escape
+    return
+  let remainder = n - m * quotient
+  let exact = if remainder == 0: 1 else: 0
+  let bits = quotient + k + 1 - exact
+  if bits > 25:
+    escape
+  else:
+    writer.put(uint64(((1 shl quotient) - 1) shl (bits - quotient)) +
+      uint64(remainder + 1 - exact), bits)
+
+proc dynCompress(writer: var BitWriter; residual: openArray[int];
+                 count, pb, kb, mb0, maxBits: int) =
+  ## `dynDecompress` run backwards: the same running mean picks each code
+  ## length, and the same collapse of that mean switches to coding zero runs.
+  let wb = (1 shl kb) - 1
+  var mb = mb0
+  var zmode = 0
+  var index = 0
+  while index < count:
+    var k = min(lg3a(mb shr QBSHIFT), kb)
+    let m = (1 shl k) - 1
+    let value = residual[index]
+    inc index
+
+    # Fold the sign into the low bit, less whatever the reader will add back
+    # from the zero run that preceded this value.
+    let n = (abs(value) shl 1) - (if value < 0: 1 else: 0) - zmode
+    dynCode32(writer, m, k, n, maxBits)
+
+    mb = pb * (n + zmode) + mb - ((pb * mb) shr QBSHIFT)
+    if n > MeanClamp: mb = MeanClamp
+    zmode = 0
+
+    if ((mb shl MMULSHIFT) < QB) and index < count:
+      zmode = 1
+      var run = 0
+      while index < count and residual[index] == 0:
+        inc index
+        inc run
+        if run >= 65535:
+          zmode = 0
+          break
+      k = lead(uint32(mb)) - BITOFF + ((mb + MOFF) shr MDENSHIFT)
+      dynCode(writer, ((1 shl k) - 1) and wb, k, run)
+      mb = 0
+
+proc mixChannels(trimmed: seq[seq[int]]; count, mixRes: int): seq[seq[int]] =
+  ## Left and right into the weighted mid/side pair the frame declares. A
+  ## weight of zero leaves the channels alone.
+  result = newSeq[seq[int]](trimmed.len)
+  if trimmed.len == 1 or mixRes == 0:
+    for channel in 0 ..< trimmed.len: result[channel] = trimmed[channel]
+    return
+  for channel in 0 ..< 2: result[channel] = newSeq[int](count)
+  let weight = (1 shl DefaultMixBits) - mixRes
+  for index in 0 ..< count:
+    let left = trimmed[0][index]
+    let right = trimmed[1][index]
+    result[0][index] = (mixRes * left + weight * right) shr DefaultMixBits
+    result[1][index] = left - right
+
+proc encodeElement(samples: seq[seq[int]]; count, bitDepth, bytesShifted: int;
+                   partial: bool; coefficients: var seq[seq[int16]]): string =
+  ## One channel element — mono or a stereo pair — as a whole frame: the
+  ## element tag, the header, the filters and the coded residuals, or the
+  ## samples raw when coding them would come to more.
+  let present = samples.len
+  let stereo = present == 2
+  let shiftBits = bytesShifted * 8
+  var chanBits = bitDepth - shiftBits
+  if stereo: inc chanBits
+  let pb = (4 * PB0) div 4 # pbFactor 4, the value the frame declares
+
+  var prefix = BitWriter()
+  prefix.put(uint64(if stereo: IdPair else: IdSingle), 3)
+  prefix.put(0, 4) # element instance tag
+
+  # The low bytes travel uncoded: at 24 bits they are close to noise, and
+  # letting the predictor chase them costs more than storing them plainly.
+  var shifted = newSeq[int](count * present)
+  var trimmed = newSeq[seq[int]](present)
+  for channel in 0 ..< present:
+    trimmed[channel] = newSeq[int](count)
+    for index in 0 ..< count:
+      let value = samples[channel][index]
+      if shiftBits > 0:
+        shifted[index * present + channel] = value and ((1 shl shiftBits) - 1)
+      trimmed[channel][index] = value shr shiftBits
+
+  # Price each mid/side weight over the leading eighth of the frame, as the
+  # reference does: the ranking barely moves, and it costs an eighth as much.
+  var bestRes = 0
+  if stereo:
+    let sampled = clamp(count div 8, 1, count)
+    var fewest = high(int)
+    for mixRes in 0 .. MaxMixRes:
+      let mixed = mixChannels(trimmed, count, mixRes)
+      var trial = BitWriter()
+      for channel in 0 ..< present:
+        var seed = initCoefficients(DefaultTaps)
+        var residual = newSeq[int](sampled)
+        predict(mixed[channel], residual, sampled, seed, DefaultTaps, chanBits,
+          DenShiftDefault)
+        dynCompress(trial, residual, sampled, pb, KB0, MB0, chanBits)
+      if trial.bitLength < fewest:
+        fewest = trial.bitLength
+        bestRes = mixRes
+  let mixed = mixChannels(trimmed, count, bestRes)
+
+  var coded = prefix
+  coded.put(0, 12)
+  coded.put(uint64((if partial: 1 shl 3 else: 0) or (bytesShifted shl 1)), 4)
+  if partial: coded.put(uint64(count), 32)
+  coded.put(uint64(DefaultMixBits), 8)
+  coded.putSigned(int64(bestRes), 8)
+  # Mode 0 in the high nibble of the first byte, pbFactor 4 in the top three
+  # bits of the second. The starting coefficients go out as written, before
+  # this frame's own adaptation moves them.
+  for channel in 0 ..< present:
+    coded.put(uint64(DenShiftDefault), 8)
+    coded.put(uint64((4 shl 5) or DefaultTaps), 8)
+    for tap in 0 ..< DefaultTaps:
+      coded.putSigned(int64(coefficients[channel][tap]), 16)
+  if shiftBits > 0:
+    for value in shifted: coded.put(uint64(value), shiftBits)
+  var carried = coefficients
+  for channel in 0 ..< present:
+    var residual = newSeq[int](count)
+    predict(mixed[channel], residual, count, carried[channel], DefaultTaps,
+      chanBits, DenShiftDefault)
+    dynCompress(coded, residual, count, pb, KB0, MB0, chanBits)
+
+  var escape = prefix
+  escape.put(0, 12)
+  escape.put(uint64((if partial: 1 shl 3 else: 0) or 1), 4)
+  if partial: escape.put(uint64(count), 32)
+  for index in 0 ..< count:
+    for channel in 0 ..< present:
+      escape.putSigned(int64(samples[channel][index]), bitDepth)
+
+  var chosen = if coded.bitLength < escape.bitLength: coded else: escape
+  if coded.bitLength < escape.bitLength: coefficients = carried
+  chosen.put(uint64(IdEnd), 3)
+  chosen.alignByte()
+  chosen.data
+
+proc writeAlac*(buffer: AudioBuffer; bitsPerSample = 16): string
+    {.contractual.} =
+  ## Encode to an `.m4a` holding one ALAC track, losslessly.
+  ##
+  ## 16 or 24 bits, mono or stereo. Samples outside [-1, 1] are clamped rather
+  ## than allowed to wrap.
+  require:
+    buffer.format.isValid
+    buffer.samples.len == buffer.format.sampleCount
+  body:
+    # Checked in the body, not as preconditions: both come from the caller, and
+    # a precondition compiles away under -d:release, which would leave a
+    # release build writing a malformed stream in silence.
+    if bitsPerSample notin [16, 24]:
+      raise newException(AudioError,
+        "alac: cannot write " & $bitsPerSample & " bits; 16 or 24")
+    if buffer.format.channels notin 1 .. 2:
+      raise newException(AudioError, "alac: cannot write " &
+        $buffer.format.channels & " channels; mono or stereo")
+
+    let channels = buffer.format.channels
+    let frames = buffer.format.frames
+    if frames == 0:
+      raise newException(AudioError, "alac: nothing to encode")
+
+    # At 24 bits the reference shifts one byte off before predicting: it keeps
+    # the extra depth from costing more than the information it carries.
+    let bytesShifted = if bitsPerSample >= 24: 1 else: 0
+    let peak = float(1 shl (bitsPerSample - 1))
+    var quantised = newSeq[seq[int]](channels)
+    for channel in 0 ..< channels:
+      quantised[channel] = newSeq[int](frames)
+      for frame in 0 ..< frames:
+        let scaled = round(float(buffer.samples[frame * channels + channel]) *
+          peak)
+        quantised[channel][frame] = int(clamp(scaled, -peak, peak - 1.0))
+
+    var coefficients = newSeq[seq[int16]](channels)
+    for channel in 0 ..< channels:
+      coefficients[channel] = initCoefficients(DefaultTaps)
+
+    var coded: seq[string]
+    var at = 0
+    while at < frames:
+      let count = min(EncodeFrameLength, frames - at)
+      var element: seq[seq[int]]
+      for channel in 0 ..< channels:
+        element.add quantised[channel][at ..< at + count]
+      coded.add encodeElement(element, count, bitsPerSample, bytesShifted,
+        count != EncodeFrameLength, coefficients)
+      at += count
+
+    var largest = 0
+    for frame in coded: largest = max(largest, frame.len)
+    var cookie: string
+    proc putBE(value: int64; width: int) =
+      for index in countdown(width - 1, 0):
+        cookie.add char(uint8((value shr (index * 8)) and 0xFF))
+    putBE(EncodeFrameLength, 4)
+    cookie.add '\0' # compatible version
+    cookie.add char(uint8(bitsPerSample))
+    cookie.add char(uint8(PB0))
+    cookie.add char(uint8(MB0))
+    cookie.add char(uint8(KB0))
+    cookie.add char(uint8(channels))
+    putBE(MaxRunDefault, 2)
+    putBE(int64(largest), 4)
+    var total = 0
+    for frame in coded: total += frame.len
+    putBE(int64((total * 8 * buffer.format.sampleRate) div frames), 4)
+    putBE(int64(buffer.format.sampleRate), 4)
+
+    let entry = SampleEntry(format: "alac", channels: channels,
+      bitsPerSample: bitsPerSample, sampleRate: buffer.format.sampleRate,
+      setup: cookie)
+    buildAudioMp4(coded, entry, EncodeFrameLength, frames)
+
+proc writeAlacFile*(path: string; buffer: AudioBuffer;
+                    bitsPerSample = 16) {.contractual.} =
+  require:
+    path.len > 0
+  body:
+    writeFile(path, writeAlac(buffer, bitsPerSample))
 
 

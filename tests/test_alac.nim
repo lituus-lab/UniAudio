@@ -14,7 +14,7 @@
 ## all. `deep24-apple.m4a` is the same signal through Apple's reference
 ## encoder rather than ffmpeg's, so agreement is between two independent
 ## encoders and not a shared assumption.
-import std/[unittest, os, strutils]
+import std/[unittest, os, strutils, osproc, math, random]
 import UniAudio
 
 const Fixtures = currentSourcePath.parentDir / "fixtures"
@@ -121,3 +121,112 @@ suite "alac through the container-agnostic entry point":
     let fromAlac = fingerprint(decodeFile(Fixtures / "sweep-alac.m4a"))
     let fromWave = fingerprint(readWaveFile(Fixtures / "sweep.wav"))
     check fromAlac.words == fromWave.words
+
+suite "alac, written":
+  ## The encoder is checked against ffmpeg, which is neither this decoder nor
+  ## the encoder any fixture came from. `-f crc` makes ffmpeg print a checksum
+  ## of the decoded samples, so one command covers the MP4 tables, the frame
+  ## headers, the mid/side weights and every sample.
+
+  proc referenceCrc(path: string; bits: int): string =
+    ## ffmpeg's CRC of the samples it decodes from `path`, at `bits` deep.
+    ## Empty when ffmpeg is not installed.
+    if findExe("ffmpeg").len == 0: return ""
+    let format = if bits > 16: "s32le" else: "s16le"
+    let (output, code) = execCmdEx("ffmpeg -v error -i " & path.quoteShell &
+      " -f " & format & " -c:a pcm_" & format & " -f crc -")
+    if code != 0:
+      echo output
+      return "failed"
+    output.strip()
+
+  proc roundTrip(name: string; bits: int) =
+    let source = readWaveFile(Fixtures / (name & ".wav"))
+    let target = getTempDir() / ("uniaudio-write-" & name & $bits & ".m4a")
+    writeAlacFile(target, source, bits)
+    defer: removeFile(target)
+
+    let decoded = readAlacFile(target)
+    check decoded.format == source.format
+    # Lossless means exactly that: the samples come back at the quantisation
+    # asked for and no further apart.
+    check worstDelta(decoded, source) < Tolerance
+
+    # The same samples out of ffmpeg's decoder, and out of ffmpeg's reading of
+    # the original WAV. Equal checksums mean the file is right by an
+    # implementation that shares nothing with this one. Each fixture is encoded
+    # at its own depth, so the comparison is exact rather than approximate.
+    let mine = referenceCrc(target, bits)
+    if mine.len > 0:
+      check mine == referenceCrc(Fixtures / (name & ".wav"), bits)
+
+  test "a mono sweep":
+    roundTrip("sweep", 16)
+
+  test "stereo, where the mid/side weights are searched":
+    roundTrip("stereo16", 16)
+
+  test "noise, which the predictor cannot help":
+    roundTrip("noise16", 16)
+
+  test "a tone spanning several frames":
+    roundTrip("tone16", 16)
+
+  test "24-bit, with a byte shifted off before predicting":
+    roundTrip("deep24", 24)
+
+  test "silence costs almost nothing":
+    # A thousand silent frames collapse into zero runs; only the MP4 tables
+    # and the magic cookie are left.
+    let source = readWaveFile(Fixtures / "silence16.wav")
+    check source.format.frames == 1000
+    check writeAlac(source, 16).len < 800
+
+  test "a frame the coder cannot shrink is stored raw instead":
+    # Full-scale noise codes to more than it occupies, so the encoder falls
+    # back to the escape frame. The file lands within a few per cent of the
+    # samples' own size, where a coder that never gave up would exceed it.
+    var noisy = initAudioBuffer(48000, 2, 9000)
+    var rng = initRand(20260817)
+    for index in 0 ..< noisy.samples.len:
+      noisy.samples[index] = float32(rng.rand(2.0) - 1.0)
+    let encoded = writeAlac(noisy, 16)
+    let raw = noisy.samples.len * 2
+    check encoded.len < raw + raw div 20
+    check worstDelta(readAlac(encoded), noisy) < Tolerance
+
+  test "a last frame of one sample":
+    # 4097 frames leave a second frame holding a single sample, which is the
+    # shortest thing the predictor and the weight search ever see.
+    var tone = initAudioBuffer(44100, 2, 4097)
+    for frame in 0 ..< 4097:
+      tone.samples[frame * 2] = float32(sin(float(frame) * 0.05) * 0.8)
+      tone.samples[frame * 2 + 1] = float32(cos(float(frame) * 0.03) * 0.6)
+    let decoded = readAlac(writeAlac(tone, 16))
+    check decoded.format.frames == 4097
+    check worstDelta(decoded, tone) < Tolerance
+
+  test "the frame count survives every boundary":
+    for frames in [1, 2, 4095, 4096, 4097, 8192, 8193]:
+      var tone = initAudioBuffer(22050, 1, frames)
+      for frame in 0 ..< frames:
+        tone.samples[frame] = float32(sin(float(frame) * 0.01) * 0.5)
+      let decoded = readAlac(writeAlac(tone, 16))
+      check decoded.format.frames == frames
+      check worstDelta(decoded, tone) < Tolerance
+
+  test "a depth or channel count the writer does not implement is refused":
+    # Both checks live in the body, not in a precondition: a precondition
+    # compiles away under -d:release, and a release build would then write a
+    # malformed stream without saying so.
+    let source = readWaveFile(Fixtures / "silence16.wav")
+    for bits in [1, 8, 12, 20, 32, 64]:
+      expect AudioError:
+        discard writeAlac(source, bits)
+    expect AudioError:
+      discard writeAlac(initAudioBuffer(44100, 3, 100), 16)
+
+  test "an encoded file is byte-for-byte reproducible":
+    # Nothing in the writer records a time or a machine, so two runs agree.
+    let source = readWaveFile(Fixtures / "stereo16.wav")
+    check writeAlac(source, 16) == writeAlac(source, 16)
