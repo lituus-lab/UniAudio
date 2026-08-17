@@ -743,11 +743,11 @@ proc imdct(spectrum: var seq[float32]; size: int) =
   ## hundredfold more arithmetic.
   let half = size div 2
   let quarter = size div 4
-  var work = newSeq[Complex](size)
+  var work = newSeq[Complex[float64]](size)
   for index in 0 ..< half:
     let angle = -PI * float(index) / float(2 * half)
-    work[index] = Complex(re: float(spectrum[index]) * cos(angle),
-                          im: float(spectrum[index]) * sin(angle))
+    work[index] = complex(float(spectrum[index]) * cos(angle),
+                          float(spectrum[index]) * sin(angle))
   fft(work)
 
   var cosine = newSeq[float64](half)

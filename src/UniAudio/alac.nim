@@ -17,7 +17,7 @@
 ## encoder's parameters. It reaches the samples through `isobmff`, which builds
 ## the MP4 the frames travel in.
 
-import std/math
+import UniMath/native_float
 import contracts
 import ./pcm
 import ./bitio

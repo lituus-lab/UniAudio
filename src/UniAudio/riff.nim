@@ -10,7 +10,8 @@
 ## is checked against a ceiling and against what the file actually holds before
 ## a single byte is allocated.
 
-import std/[streams, strutils, math]
+import std/[streams, strutils]
+import UniMath/native_float
 import contracts
 import ./pcm
 

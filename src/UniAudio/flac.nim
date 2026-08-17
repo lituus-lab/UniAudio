@@ -14,7 +14,8 @@
 ## carries: block size, channel count and bit depth all come from a header a
 ## damaged or hostile file controls.
 
-import std/[streams, md5, math]
+import std/[streams, md5]
+import UniMath/native_float
 import contracts
 import ./pcm
 import ./bitio
