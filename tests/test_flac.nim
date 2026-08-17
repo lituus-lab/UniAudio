@@ -6,7 +6,7 @@
 ## level 0 (fixed predictors) and level 8 (high-order LPC). FLAC is lossless,
 ## so decoding the FLAC must reproduce the WAV: the only difference allowed is
 ## the integer-to-float scale, one step apart between the two readers.
-import std/[unittest, os, strutils]
+import std/[unittest, os, strutils, osproc]
 import UniAudio
 
 const Fixtures = currentSourcePath.parentDir / "fixtures"
@@ -72,3 +72,76 @@ suite "flac refuses what it cannot decode":
     broken[syncAt] = '\x00'
     expect AudioError:
       discard readFlac(broken)
+
+
+suite "flac, written":
+  proc roundTrip(name: string; bits: int) =
+    ## Encode, then read it back with this library and with the reference tool.
+    let source = readWaveFile(Fixtures / (name & ".wav"))
+    let target = getTempDir() / ("uniaudio-write-" & name & ".flac")
+    writeFlacFile(target, source, bits)
+    defer: removeFile(target)
+
+    let decoded = readFlacFile(target)
+    check decoded.format.sampleRate == source.format.sampleRate
+    check decoded.format.channels == source.format.channels
+    check decoded.format.frames == source.format.frames
+    # Lossless means exactly: the samples come back at the quantisation the
+    # encoder was asked for, and no further apart.
+    check worstDelta(decoded, source) < Tolerance
+
+    # `flac -t` decodes the stream and checks it against the MD5 in
+    # STREAMINFO, so it verifies the framing, both CRCs and the samples at
+    # once — against the reference implementation, not against this one.
+    if findExe("flac").len > 0:
+      let (output, code) = execCmdEx("flac -t --totally-silent " &
+        target.quoteShell)
+      check code == 0
+      if code != 0: echo output
+
+  test "a mono sweep":
+    roundTrip("sweep", 16)
+
+  test "stereo":
+    roundTrip("stereo16", 16)
+
+  test "noise, where the predictors buy almost nothing":
+    roundTrip("noise16", 16)
+
+  test "a tone spanning several blocks":
+    roundTrip("tone16", 16)
+
+  test "24-bit":
+    roundTrip("deep24", 24)
+
+  test "silence costs almost nothing":
+    # Every subframe is CONSTANT, so a thousand frames fit in a few dozen
+    # bytes. A predictor that failed to notice would cost thousands.
+    let source = readWaveFile(Fixtures / "silence16.wav")
+    check source.format.frames == 1000
+    check writeFlac(source, 16).len < 200
+
+  test "the reference decoder gives back what went in":
+    if findExe("flac").len == 0: skip()
+    else:
+      let source = readWaveFile(Fixtures / "stereo16.wav")
+      let encoded = getTempDir() / "uniaudio-write-ref.flac"
+      let back = getTempDir() / "uniaudio-write-ref.wav"
+      writeFlacFile(encoded, source, 16)
+      defer:
+        removeFile(encoded)
+        removeFile(back)
+      let (output, code) = execCmdEx("flac -d -f --totally-silent -o " &
+        back.quoteShell & " " & encoded.quoteShell)
+      check code == 0
+      if code != 0: echo output
+      else: check worstDelta(readWaveFile(back), source) < Tolerance
+
+  test "a depth the writer does not implement is refused in either build":
+    # The check is in the body, not a precondition: a precondition compiles
+    # away under -d:release, and a release build would then write a malformed
+    # stream without saying so.
+    let source = readWaveFile(Fixtures / "silence16.wav")
+    for bits in [1, 12, 32, 64]:
+      expect AudioError:
+        discard writeFlac(source, bits)

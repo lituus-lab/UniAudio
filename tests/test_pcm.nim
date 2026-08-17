@@ -119,3 +119,10 @@ suite "wav":
       "\2\0" & "\12\0" & "data" & "\4\0\0\0" & "\0\0\0\0"
     expect AudioError:
       discard readWave(newStringStream(raw))
+
+suite "the wav writer checks its arguments in either build":
+  test "a depth it does not implement is refused, release included":
+    let tone = initAudioBuffer(8000, 1, 10)
+    for bits in [1, 8, 12, 32]:
+      expect AudioError:
+        writeWaveFile(getTempDir() / "uniaudio-bad.wav", tone, bits)

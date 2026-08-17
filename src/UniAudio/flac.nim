@@ -12,7 +12,7 @@
 ## carries: block size, channel count and bit depth all come from a header a
 ## damaged or hostile file controls.
 
-import std/streams
+import std/[streams, md5]
 import contracts
 import ./pcm
 
@@ -405,5 +405,322 @@ proc readFlacFile*(path: string): AudioBuffer {.contractual.} =
       raise newException(IOError, "flac: cannot open " & path)
     defer: stream.close()
     readFlac(stream.readAll())
+
+# --- writing -----------------------------------------------------------------
+#
+# Fixed polynomial predictors with Rice-coded residuals: what `flac -0` emits.
+# No LPC, so the files are larger than the reference encoder's default, and
+# exactly as lossless — a decoder cannot tell which predictor family was used.
+
+type BitWriter = object
+  ## MSB-first, matching the reader.
+  data: string
+  bits: int ## how many bits of the last byte are used
+
+proc put(writer: var BitWriter; value: uint64; count: int) =
+  for index in countdown(count - 1, 0):
+    if writer.bits == 0: writer.data.add '\0'
+    let bit = uint8((value shr index) and 1)
+    writer.data[^1] = char(uint8(writer.data[^1]) or (bit shl (7 - writer.bits)))
+    writer.bits = (writer.bits + 1) and 7
+
+proc putSigned(writer: var BitWriter; value: int64; count: int) =
+  writer.put(cast[uint64](value) and ((1'u64 shl count) - 1), count)
+
+proc alignByte(writer: var BitWriter) =
+  while writer.bits != 0: writer.put(0, 1)
+
+func crc8(data: openArray[char]): uint8 =
+  ## Polynomial 0x07 over the frame header, as FLAC specifies.
+  for character in data:
+    result = result xor uint8(character)
+    for _ in 0 ..< 8:
+      result = if (result and 0x80'u8) != 0: (result shl 1) xor 0x07'u8
+               else: result shl 1
+
+func crc16(data: openArray[char]): uint16 =
+  ## Polynomial 0x8005 over the whole frame, header included.
+  for character in data:
+    result = result xor (uint16(uint8(character)) shl 8)
+    for _ in 0 ..< 8:
+      result = if (result and 0x8000'u16) != 0: (result shl 1) xor 0x8005'u16
+               else: result shl 1
+
+func rateCode(rate: int): int =
+  ## A code for the common rates; 13 means "sixteen explicit bits follow".
+  case rate
+  of 88200: 1
+  of 176400: 2
+  of 192000: 3
+  of 8000: 4
+  of 16000: 5
+  of 22050: 6
+  of 24000: 7
+  of 32000: 8
+  of 44100: 9
+  of 48000: 10
+  of 96000: 11
+  else: 13
+
+func depthCode(bits: int): int =
+  case bits
+  of 8: 1
+  of 12: 2
+  of 16: 4
+  of 20: 5
+  of 24: 6
+  of 32: 7
+  else: 0
+
+proc putUtf8Number(writer: var BitWriter; value: int) =
+  ## The frame number, in the UTF-8-like coding FLAC borrows.
+  if value < 0x80:
+    writer.put(uint64(value), 8)
+  elif value < 0x800:
+    writer.put(0xC0'u64 or uint64(value shr 6), 8)
+    writer.put(0x80'u64 or uint64(value and 0x3F), 8)
+  elif value < 0x10000:
+    writer.put(0xE0'u64 or uint64(value shr 12), 8)
+    writer.put(0x80'u64 or uint64((value shr 6) and 0x3F), 8)
+    writer.put(0x80'u64 or uint64(value and 0x3F), 8)
+  else:
+    writer.put(0xF0'u64 or uint64(value shr 18), 8)
+    writer.put(0x80'u64 or uint64((value shr 12) and 0x3F), 8)
+    writer.put(0x80'u64 or uint64((value shr 6) and 0x3F), 8)
+    writer.put(0x80'u64 or uint64(value and 0x3F), 8)
+
+func zigzag(value: int64): uint64 =
+  if value < 0: cast[uint64](-2 * value - 1) else: cast[uint64](2 * value)
+
+func riceBits(values: openArray[int64]; first, last, parameter: int): int =
+  ## What one partition costs at this Rice parameter, including its 4-bit
+  ## parameter field.
+  result = 4
+  for index in first ..< last:
+    result += int(zigzag(values[index]) shr parameter) + 1 + parameter
+
+func bestParameter(values: openArray[int64]; first, last: int): int =
+  ## The cheapest parameter for one partition. 14 is the widest the 4-bit field
+  ## can name before it means "escape", which this encoder never emits.
+  var best = 0
+  var bestCost = high(int)
+  for parameter in 0 .. 14:
+    let cost = riceBits(values, first, last, parameter)
+    if cost < bestCost:
+      bestCost = cost
+      best = parameter
+  best
+
+iterator partitionRanges(blockSize, order, partitionOrder: int):
+    tuple[first, last: int] =
+  ## The residual slice each partition covers.
+  ##
+  ## Partitions are counted over the block, not over the residual: the warm-up
+  ## samples occupy the first `order` slots of the block, so partition zero
+  ## carries that many fewer residuals than the rest.
+  let partitions = 1 shl partitionOrder
+  let each = blockSize shr partitionOrder
+  var at = 0
+  for partition in 0 ..< partitions:
+    let count = if partition == 0: each - order else: each
+    yield (at, at + count)
+    at += count
+
+proc fixedResidual(samples: openArray[int64]; order, count: int;
+                   into: var seq[int64]) =
+  ## The residual of the fixed predictor of that order.
+  into.setLen(count - order)
+  for index in order ..< count:
+    var value = samples[index]
+    case order
+    of 0: discard
+    of 1: value -= samples[index - 1]
+    of 2: value -= 2 * samples[index - 1] - samples[index - 2]
+    of 3: value -= 3 * samples[index - 1] - 3 * samples[index - 2] +
+            samples[index - 3]
+    else: value -= 4 * samples[index - 1] - 6 * samples[index - 2] +
+            4 * samples[index - 3] - samples[index - 4]
+    into[index - order] = value
+
+proc residualCost(values: openArray[int64]; blockSize, order: int;
+                  partitionOrder: var int): int =
+  ## The cheapest partitioning of one residual, and its bit cost. Splitting
+  ## lets a quiet passage and a loud one carry different parameters.
+  result = high(int)
+  partitionOrder = 0
+  for candidate in 0 .. 6:
+    let partitions = 1 shl candidate
+    if blockSize mod partitions != 0: continue
+    if (blockSize shr candidate) <= order: continue
+    var total = 2 + 4 # coding method and partition order
+    for (first, last) in partitionRanges(blockSize, order, candidate):
+      total += riceBits(values, first, last, bestParameter(values, first, last))
+    if total < result:
+      result = total
+      partitionOrder = candidate
+
+proc putResidual(writer: var BitWriter; values: openArray[int64];
+                 blockSize, order, partitionOrder: int) =
+  writer.put(0, 2) # 4-bit Rice parameters
+  writer.put(uint64(partitionOrder), 4)
+  for (first, last) in partitionRanges(blockSize, order, partitionOrder):
+    let parameter = bestParameter(values, first, last)
+    writer.put(uint64(parameter), 4)
+    for index in first ..< last:
+      let folded = zigzag(values[index])
+      let quotient = int(folded shr parameter)
+      for _ in 0 ..< quotient: writer.put(0, 1)
+      writer.put(1, 1)
+      if parameter > 0:
+        writer.put(folded and ((1'u64 shl parameter) - 1), parameter)
+
+proc putSubframe(writer: var BitWriter; samples: openArray[int64];
+                 count, bits: int; scratch: var seq[int64]) =
+  ## The cheapest of constant, verbatim, and the five fixed predictors.
+  var constant = true
+  for index in 1 ..< count:
+    if samples[index] != samples[0]:
+      constant = false
+      break
+  if constant:
+    writer.put(0, 1)
+    writer.put(0, 6) # CONSTANT
+    writer.put(0, 1)
+    writer.putSigned(samples[0], bits)
+    return
+
+  var bestOrder = -1
+  var bestCost = count * bits # what VERBATIM would cost
+  var bestPartition = 0
+  for order in 0 .. 4:
+    if count <= order: continue
+    fixedResidual(samples, order, count, scratch)
+    var partitionOrder = 0
+    let cost = order * bits + residualCost(scratch, count, order, partitionOrder)
+    if cost < bestCost:
+      bestCost = cost
+      bestOrder = order
+      bestPartition = partitionOrder
+
+  if bestOrder < 0:
+    writer.put(0, 1)
+    writer.put(1, 6) # VERBATIM
+    writer.put(0, 1)
+    for index in 0 ..< count: writer.putSigned(samples[index], bits)
+    return
+
+  writer.put(0, 1)
+  writer.put(uint64(8 + bestOrder), 6) # FIXED
+  writer.put(0, 1)
+  for index in 0 ..< bestOrder: writer.putSigned(samples[index], bits)
+  fixedResidual(samples, bestOrder, count, scratch)
+  writer.putResidual(scratch, count, bestOrder, bestPartition)
+
+const WriteBlockSize = 4096
+
+proc writeFlac*(buffer: AudioBuffer; bitsPerSample = 16): string
+    {.contractual.} =
+  ## Encode to a native FLAC stream, losslessly.
+  ##
+  ## Fixed predictors only, so the result is larger than the reference
+  ## encoder's default and decodes to exactly the same samples: which predictor
+  ## family produced a frame is not something a decoder can observe.
+  require:
+    buffer.format.isValid
+    buffer.samples.len == buffer.format.sampleCount
+  body:
+    # Checked in the body, not as a precondition: the depth comes from the
+    # caller, and a precondition compiles away under -d:release, which would
+    # leave a release build writing a malformed stream in silence.
+    if bitsPerSample notin [8, 16, 24]:
+      raise newException(AudioError,
+        "flac: cannot write " & $bitsPerSample & " bits; 8, 16 or 24")
+    if buffer.format.channels notin 1 .. 8:
+      raise newException(AudioError,
+        "flac: cannot write " & $buffer.format.channels & " channels; 1 to 8")
+    let channels = buffer.format.channels
+    let frames = buffer.format.frames
+    let peak = float32(1'i64 shl (bitsPerSample - 1))
+    let limit = int64(1'i64 shl (bitsPerSample - 1))
+
+    # Quantise once: the MD5 in STREAMINFO covers these samples, and it has to
+    # be the same integers the frames carry.
+    var quantised = newSeq[int64](frames * channels)
+    var raw = newStringOfCap(frames * channels * (bitsPerSample div 8))
+    for index in 0 ..< frames * channels:
+      var scaled = float32(buffer.samples[index]) * peak
+      if scaled > peak - 1: scaled = peak - 1
+      if scaled < -peak: scaled = -peak
+      let value = int64(scaled)
+      quantised[index] = value
+      for byteIndex in 0 ..< bitsPerSample div 8:
+        raw.add char(uint8((value shr (8 * byteIndex)) and 0xFF))
+    let digest = toMD5(raw)
+
+    var stream = "fLaC"
+    var header = BitWriter()
+    header.put(1, 1) # last metadata block
+    header.put(0, 7) # STREAMINFO
+    header.put(34, 24) # its length
+    header.put(uint64(min(WriteBlockSize, max(frames, 1))), 16)
+    header.put(uint64(min(WriteBlockSize, max(frames, 1))), 16)
+    header.put(0, 24) # min frame size, unknown
+    header.put(0, 24) # max frame size, unknown
+    header.put(uint64(buffer.format.sampleRate), 20)
+    header.put(uint64(channels - 1), 3)
+    header.put(uint64(bitsPerSample - 1), 5)
+    header.put(uint64(frames), 36)
+    for index in 0 ..< 16: header.put(uint64(uint8(digest[index])), 8)
+    stream.add header.data
+
+    var scratch = newSeq[int64]()
+    var channelSamples = newSeq[seq[int64]](channels)
+    var frameNumber = 0
+    var at = 0
+    while at < frames:
+      let count = min(WriteBlockSize, frames - at)
+      for channel in 0 ..< channels:
+        channelSamples[channel].setLen(count)
+        for index in 0 ..< count:
+          channelSamples[channel][index] =
+            quantised[(at + index) * channels + channel]
+        for index in 0 ..< count:
+          if channelSamples[channel][index] >= limit:
+            channelSamples[channel][index] = limit - 1
+
+      var frame = BitWriter()
+      frame.put(0b11111111111110'u64, 14) # sync
+      frame.put(0, 1) # reserved
+      frame.put(0, 1) # fixed blocking strategy
+      let sizeCode = if count == WriteBlockSize: 12 else: 7
+      frame.put(uint64(sizeCode), 4)
+      let rate = rateCode(buffer.format.sampleRate)
+      frame.put(uint64(rate), 4)
+      frame.put(uint64(channels - 1), 4) # independent channels
+      frame.put(uint64(depthCode(bitsPerSample)), 3)
+      frame.put(0, 1) # reserved
+      frame.putUtf8Number(frameNumber)
+      if sizeCode == 7: frame.put(uint64(count - 1), 16)
+      if rate == 13: frame.put(uint64(buffer.format.sampleRate), 16)
+      frame.put(uint64(crc8(frame.data)), 8)
+
+      for channel in 0 ..< channels:
+        frame.putSubframe(channelSamples[channel], count, bitsPerSample,
+          scratch)
+      frame.alignByte()
+      frame.put(uint64(crc16(frame.data)), 16)
+
+      stream.add frame.data
+      at += count
+      inc frameNumber
+
+    stream
+
+proc writeFlacFile*(path: string; buffer: AudioBuffer; bitsPerSample = 16)
+    {.contractual.} =
+  require:
+    path.len > 0
+  body:
+    writeFile(path, writeFlac(buffer, bitsPerSample))
 
 

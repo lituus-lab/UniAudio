@@ -78,6 +78,14 @@ int uaud_decode_resampled(const char *path, int target_rate, int to_mono,
 int uaud_write_wave(const char *path, const float *samples, int sample_rate,
                     int channels, long long frames, int bits_per_sample);
 
+/* Encode interleaved floats to a native FLAC file, losslessly.
+ * bits_per_sample is 8, 16 or 24, and up to 8 channels are accepted.
+ *
+ * Fixed predictors, so the file is larger than the reference encoder's default
+ * and decodes to exactly the same samples. */
+int uaud_write_flac(const char *path, const float *samples, int sample_rate,
+                    int channels, long long frames, int bits_per_sample);
+
 /* Release a buffer this library allocated. NULL is accepted. */
 void uaud_free(void *buffer);
 

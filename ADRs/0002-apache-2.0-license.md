@@ -31,10 +31,13 @@ ports rather than original work:
 FLAC, RIFF and AIFF are written from their published formats, so they add no
 attribution of their own.
 
-## What is not implemented, and why
+## What the licence decides
 
-A format under an active patent licence is out of scope regardless of how
-easily it could be written: AAC would put a licence obligation on every
-consumer of this library. That is a licensing decision, not a technical one,
-which is why it is recorded here.
+Whether a codec can be implemented here is a licensing question before it is a
+technical one, which is why it belongs in this record rather than in the code.
+
+AAC is the case that matters. It is no harder to write than the codecs above,
+and it is absent because it carries an active patent licence: a decoder here
+would hand that obligation to every consumer of the library, including the ones
+who only wanted to read a WAV.
 

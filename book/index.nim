@@ -173,10 +173,13 @@ nbCode:
 nbText: """
 ## What is deliberately absent
 
-There is no AAC decoder here, and there will not be one. The library implements
-formats nobody charges for: FLAC and Vorbis, royalty-free by design; ALAC,
-whose reference decoder Apple released under Apache 2.0, with the patent grant
-that licence carries; and MP3, whose last patents expired in 2017.
+There is no AAC decoder here. The library implements formats nobody charges
+for: FLAC and Vorbis, royalty-free by design; ALAC, whose reference codec Apple
+released under Apache 2.0, with the patent grant that licence carries; and MP3,
+whose last patents expired in 2017.
+
+AAC is the line that draws itself: it carries an active patent licence, and a
+decoder here would hand that obligation to everything downstream.
 
 A format it will not decode is named in the error rather than approximated:
 knowing a file is AAC and unsupported is something you can act on, "unsupported

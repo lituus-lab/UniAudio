@@ -187,8 +187,13 @@ proc writeWave*(stream: Stream; buffer: AudioBuffer; bitsPerSample = 16)
   require:
     buffer.format.isValid
     buffer.samples.len == buffer.format.sampleCount
-    bitsPerSample in [16, 24]
   body:
+    # Checked in the body, not as a precondition: the depth comes from the
+    # caller, and a precondition compiles away under -d:release, which would
+    # leave a release build writing a malformed file in silence.
+    if bitsPerSample notin [16, 24]:
+      raise newException(AudioError,
+        "wav: cannot write " & $bitsPerSample & " bits; 16 or 24")
     let bytesPerSample = bitsPerSample div 8
     let dataBytes = buffer.samples.len * bytesPerSample
     stream.write("RIFF")
