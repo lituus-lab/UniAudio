@@ -56,6 +56,28 @@ int uaud_sniff(const char *path, int *container);
 int uaud_probe(const char *path, int *sample_rate, int *channels,
                long long *frames);
 
+/* Decode a file to interleaved floats in [-1, 1]. frames counts per channel,
+ * so the block holds frames * channels values. It is allocated by the library
+ * and released with uaud_free; a file that decoded to nothing yields a count
+ * of zero and a NULL pointer, not an error. */
+int uaud_decode(const char *path, int *sample_rate, int *channels,
+                long long *frames, float **samples);
+
+/* Decode, then optionally average the channels and change the rate. A
+ * target_rate of 0 leaves the rate alone; to_mono is a flag.
+ *
+ * The resampling is linear, which suits analysis and does not suit listening;
+ * a resampler meant for listening would be a different call. */
+int uaud_decode_resampled(const char *path, int target_rate, int to_mono,
+                          int *sample_rate, int *channels, long long *frames,
+                          float **samples);
+
+/* Write interleaved floats as a RIFF/WAVE file: the only format this library
+ * writes. bits_per_sample is 16 or 24; samples outside [-1, 1] are clamped
+ * rather than left to wrap. */
+int uaud_write_wave(const char *path, const float *samples, int sample_rate,
+                    int channels, long long frames, int bits_per_sample);
+
 /* Release a buffer this library allocated. NULL is accepted. */
 void uaud_free(void *buffer);
 
@@ -79,6 +101,12 @@ int uaud_fingerprint(const char *path, double *duration, unsigned int **words,
  * empty fingerprints are not alike: they are unknown, which reads as 0. */
 double uaud_similarity(const unsigned int *a, int a_count,
                        const unsigned int *b, int b_count);
+
+/* The best similarity over a bounded time shift, for two copies of a recording
+ * that start at different points. */
+double uaud_offset_similarity(const unsigned int *a, int a_count,
+                              const unsigned int *b, int b_count,
+                              int max_shift);
 
 /* Shape of a RIFF/WAVE file. Reads the whole file, because a WAV declares its
  * size in a header that cannot be trusted: the frame count reported is the one

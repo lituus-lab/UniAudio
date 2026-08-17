@@ -1,13 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 lituus-lab
 """The Python surface over the C ABI, exercised against real files."""
+import array
+import math
 import pathlib
 import struct
 
 import pytest
 
-from uniaudio import (UniAudioError, fingerprint, probe, similarity, sniff,
-                      tags, version, wave_probe)
+from uniaudio import (UniAudioError, decode, decode_resampled, fingerprint,
+                      offset_similarity, probe, similarity, sniff, tags,
+                      version, wave_probe, write_wave)
 
 FIXTURES = pathlib.Path(__file__).resolve().parents[2] / "tests" / "fixtures"
 
@@ -132,3 +135,62 @@ def test_a_file_with_no_tags_reads_as_empty_fields_not_an_error():
 def test_a_name_with_no_field_of_its_own_is_kept():
     result = tags(FIXTURES / "tagged.flac")
     assert any(entry["key"] == "ENCODER" for entry in result["other"])
+
+
+def test_decode_returns_one_bulk_array_not_a_list_of_objects():
+    rate, channels, frames, samples = decode(FIXTURES / "sweep.flac")
+    assert (rate, channels, frames) == (11025, 1, 33075)
+    # A float32 array, not a Python list: a three-minute stereo track would be
+    # sixteen million objects otherwise.
+    assert isinstance(samples, array.array)
+    assert samples.typecode == "f"
+    assert len(samples) == frames * channels
+
+
+def test_decode_resampled_averages_the_channels_and_changes_the_rate():
+    rate, channels, frames, samples = decode_resampled(
+        FIXTURES / "stereo16.wav", target_rate=22050, to_mono=True)
+    assert (rate, channels, frames) == (22050, 1, 2500)
+    assert len(samples) == 2500
+
+
+def test_decode_resampled_leaves_the_rate_alone_when_asked_for_zero():
+    rate, channels, frames, _ = decode_resampled(FIXTURES / "stereo16.wav")
+    assert (rate, channels, frames) == (44100, 2, 5000)
+
+
+def test_written_wav_reads_back_within_one_quantisation_step(tmp_path):
+    tone = array.array("f", [0.4 * math.sin(2 * math.pi * 440 * i / 8000)
+                             for i in range(500)])
+    path = tmp_path / "tone.wav"
+    write_wave(path, tone, 8000, 1, 16)
+    rate, channels, frames, back = decode(path)
+    assert (rate, channels, frames) == (8000, 1, 500)
+    assert max(abs(a - b) for a, b in zip(tone, back)) < 1.0 / 30000.0
+
+
+def test_write_wave_accepts_a_plain_list_too(tmp_path):
+    path = tmp_path / "pair.wav"
+    write_wave(path, [0.0, 0.1, 0.2, 0.3], 8000, 2, 16)
+    assert wave_probe(path) == (8000, 2, 2)
+
+
+def test_write_wave_refuses_a_ragged_frame_count(tmp_path):
+    with pytest.raises(ValueError):
+        write_wave(tmp_path / "odd.wav", [0.0, 0.1, 0.2], 8000, 2, 16)
+
+
+def test_offset_similarity_finds_a_match_a_flat_comparison_misses():
+    _, words = fingerprint(FIXTURES / "sweep.wav")
+    shifted = words[4:]
+    assert offset_similarity(words, shifted, 8) == 1.0
+    assert similarity(words, shifted) < 0.9
+    assert offset_similarity([], [], 8) == 0.0
+
+
+def test_write_wave_refuses_a_depth_the_writer_does_not_implement(tmp_path):
+    # 8-bit WAV is unsigned by convention and this writer emits signed bytes;
+    # 32 bits carries no more precision than 24 from a float32 sample.
+    for bits in (8, 32):
+        with pytest.raises(UniAudioError):
+            write_wave(tmp_path / f"d{bits}.wav", [0.0, 0.1], 8000, 1, bits)

@@ -83,6 +83,117 @@ proc uaud_probe(path: cstring; sampleRate, channels: ptr cint;
     lastError = getCurrentExceptionMsg()
     cint(uaudErrFormat)
 
+proc emitBuffer(buffer: AudioBuffer; sampleRate, channels: ptr cint;
+                frames: ptr clonglong; samples: ptr ptr cfloat): cint =
+  ## Hand a decoded buffer across the boundary. The samples are allocated here
+  ## and released with `uaud_free`; a file that decoded to nothing yields a
+  ## count of zero and a null pointer, not an error.
+  sampleRate[] = cint(buffer.format.sampleRate)
+  channels[] = cint(buffer.format.channels)
+  frames[] = clonglong(buffer.format.frames)
+  if buffer.samples.len == 0:
+    samples[] = nil
+    return cint(uaudOk)
+  let bytes = buffer.samples.len * sizeof(cfloat)
+  let target = cast[ptr UncheckedArray[cfloat]](alloc(bytes))
+  for index in 0 ..< buffer.samples.len:
+    target[index] = cfloat(buffer.samples[index])
+  samples[] = cast[ptr cfloat](target)
+  cint(uaudOk)
+
+proc uaud_decode(path: cstring; sampleRate, channels: ptr cint;
+                 frames: ptr clonglong; samples: ptr ptr cfloat): cint
+                {.exportc, cdecl, dynlib.} =
+  ## Decode a file to interleaved floats in [-1, 1]. `frames` counts per
+  ## channel, so the block holds `frames * channels` values.
+  if path == nil or sampleRate == nil or channels == nil or frames == nil or
+      samples == nil:
+    lastError = "path and every output pointer must be non-null"
+    return cint(uaudErrArg)
+  try:
+    result = emitBuffer(decodeFile($path), sampleRate, channels, frames,
+      samples)
+    lastError = ""
+  except AudioError as error:
+    lastError = error.msg
+    result = cint(uaudErrFormat)
+  except IOError, OSError:
+    lastError = getCurrentExceptionMsg()
+    result = cint(uaudErrIo)
+  except CatchableError, Defect:
+    lastError = getCurrentExceptionMsg()
+    result = cint(uaudErrFormat)
+
+proc uaud_decode_resampled(path: cstring; targetRate: cint; toMonoFlag: cint;
+                           sampleRate, channels: ptr cint;
+                           frames: ptr clonglong;
+                           samples: ptr ptr cfloat): cint
+                          {.exportc, cdecl, dynlib.} =
+  ## Decode, then optionally average the channels and change the rate. A
+  ## `target_rate` of zero leaves the rate alone.
+  ##
+  ## The resampling is linear, which is right for analysis and wrong for
+  ## listening; a resampler meant for listening would be a different call.
+  if path == nil or sampleRate == nil or channels == nil or frames == nil or
+      samples == nil:
+    lastError = "path and every output pointer must be non-null"
+    return cint(uaudErrArg)
+  if targetRate < 0 or targetRate > cint(MaxSampleRate):
+    lastError = "target rate out of range"
+    return cint(uaudErrArg)
+  try:
+    var buffer = decodeFile($path)
+    if toMonoFlag != 0: buffer = buffer.toMono()
+    if targetRate > 0 and int(targetRate) != buffer.format.sampleRate:
+      buffer = buffer.resample(int(targetRate))
+    result = emitBuffer(buffer, sampleRate, channels, frames, samples)
+    lastError = ""
+  except AudioError as error:
+    lastError = error.msg
+    result = cint(uaudErrFormat)
+  except IOError, OSError:
+    lastError = getCurrentExceptionMsg()
+    result = cint(uaudErrIo)
+  except CatchableError, Defect:
+    lastError = getCurrentExceptionMsg()
+    result = cint(uaudErrFormat)
+
+proc uaud_write_wave(path: cstring; samples: ptr cfloat; sampleRate,
+                     channels: cint; frames: clonglong;
+                     bitsPerSample: cint): cint {.exportc, cdecl, dynlib.} =
+  ## Write interleaved floats as a RIFF/WAVE file. The only format this
+  ## library writes; everything else it only reads.
+  if path == nil or samples == nil:
+    lastError = "path and samples must be non-null"
+    return cint(uaudErrArg)
+  if sampleRate <= 0 or sampleRate > cint(MaxSampleRate) or channels <= 0 or
+      channels > cint(MaxChannels) or frames < 0:
+    lastError = "sample rate, channel count or frame count out of range"
+    return cint(uaudErrArg)
+  if bitsPerSample notin [cint(16), cint(24)]:
+    # What the writer implements. Eight-bit WAV is unsigned by convention and
+    # this writer emits signed bytes, so it would round-trip inverted; 32 bits
+    # carries no more precision than 24 from a float32 sample.
+    lastError = "bits per sample must be 16 or 24"
+    return cint(uaudErrArg)
+  try:
+    var buffer = initAudioBuffer(int(sampleRate), int(channels), int(frames))
+    let source = cast[ptr UncheckedArray[cfloat]](samples)
+    for index in 0 ..< buffer.samples.len:
+      buffer.samples[index] = float32(source[index])
+    writeWaveFile($path, buffer, int(bitsPerSample))
+    lastError = ""
+    result = cint(uaudOk)
+  except AudioError as error:
+    lastError = error.msg
+    result = cint(uaudErrFormat)
+  except IOError, OSError:
+    lastError = getCurrentExceptionMsg()
+    result = cint(uaudErrIo)
+  except CatchableError, Defect:
+    lastError = getCurrentExceptionMsg()
+    result = cint(uaudErrFormat)
+
 proc uaud_free(buffer: pointer) {.exportc, cdecl, dynlib.} =
   ## Release a buffer this library allocated. NULL is accepted.
   if buffer != nil: dealloc(buffer)
@@ -200,6 +311,23 @@ proc uaud_similarity(a: ptr uint32; aCount: cint; b: ptr uint32;
   for index in 0 ..< int(aCount): left.words.add leftArray[index]
   for index in 0 ..< int(bCount): right.words.add rightArray[index]
   cdouble(similarity(left, right))
+
+proc uaud_offset_similarity(a: ptr uint32; aCount: cint; b: ptr uint32;
+                            bCount: cint; maxShift: cint): cdouble
+                           {.exportc, cdecl, dynlib.} =
+  ## The best similarity over a bounded time shift, for two copies of a
+  ## recording that start at different points.
+  if a == nil or b == nil or aCount <= 0 or bCount <= 0 or maxShift < 0:
+    return 0.0
+  var first, second: Fingerprint
+  let aWords = cast[ptr UncheckedArray[uint32]](a)
+  let bWords = cast[ptr UncheckedArray[uint32]](b)
+  for index in 0 ..< int(aCount): first.words.add aWords[index]
+  for index in 0 ..< int(bCount): second.words.add bWords[index]
+  try:
+    cdouble(offsetSimilarity(first, second, int(maxShift)))
+  except CatchableError, Defect:
+    0.0
 
 proc uaud_wave_probe(path: cstring; sampleRate, channels: ptr cint;
                      frames: ptr clonglong): cint {.exportc, cdecl, dynlib.} =

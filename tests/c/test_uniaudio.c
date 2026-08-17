@@ -11,6 +11,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 #include <string.h>
 
 static void put_u32(FILE *f, unsigned long value) {
@@ -164,6 +165,77 @@ int main(void) {
 
   assert(uaud_tags_json(NULL, &json) == UAUD_ERR_ARG);
 
+  /* Samples across the boundary: write a tone, read it back, compare. This is
+   * the library's central function and the only check that the bundled
+   * allocation and the frame arithmetic agree. */
+  char round[512];
+  snprintf(round, sizeof round, "%suniaudio_capi_round.wav", tmp ? tmp : "/tmp/");
+  enum { RoundFrames = 800 };
+  static float written[RoundFrames * 2];
+  for (int i = 0; i < RoundFrames; i++) {
+    const float value = (float)(0.5 * sin(2.0 * 3.14159265358979 * 440.0 * i / 8000.0));
+    written[i * 2] = value;
+    written[i * 2 + 1] = -value;
+  }
+  assert(uaud_write_wave(round, written, 8000, 2, RoundFrames, 16) == UAUD_OK);
+
+  int drate = 0, dchannels = 0;
+  long long dframes = 0;
+  float *decoded = NULL;
+  assert(uaud_decode(round, &drate, &dchannels, &dframes, &decoded) == UAUD_OK);
+  assert(drate == 8000);
+  assert(dchannels == 2);
+  assert(dframes == RoundFrames);
+  assert(decoded != NULL);
+  /* 16-bit quantisation is the only difference a round trip may introduce. */
+  for (int i = 0; i < RoundFrames * 2; i++) {
+    const float delta = decoded[i] - written[i];
+    assert(delta < 1.0f / 30000.0f && delta > -1.0f / 30000.0f);
+  }
+  uaud_free(decoded);
+
+  /* Averaging the channels and halving the rate. The two channels here are
+   * opposite in sign, so their mean is silence — which is what proves the mix
+   * happened rather than one side being kept. */
+  decoded = NULL;
+  assert(uaud_decode_resampled(round, 4000, 1, &drate, &dchannels, &dframes,
+                               &decoded) == UAUD_OK);
+  assert(drate == 4000);
+  assert(dchannels == 1);
+  assert(dframes == RoundFrames / 2);
+  for (long long i = 0; i < dframes; i++) {
+    assert(decoded[i] < 1.0f / 30000.0f && decoded[i] > -1.0f / 30000.0f);
+  }
+  uaud_free(decoded);
+
+  /* Leaving the rate alone. */
+  decoded = NULL;
+  assert(uaud_decode_resampled(round, 0, 0, &drate, &dchannels, &dframes,
+                               &decoded) == UAUD_OK);
+  assert(drate == 8000 && dchannels == 2 && dframes == RoundFrames);
+  uaud_free(decoded);
+
+  assert(uaud_decode(NULL, &drate, &dchannels, &dframes, &decoded) == UAUD_ERR_ARG);
+  assert(uaud_write_wave(round, written, 8000, 2, RoundFrames, 7) == UAUD_ERR_ARG);
+  /* Eight-bit WAV is unsigned by convention and this writer emits signed
+   * bytes, so it is refused rather than written inverted. */
+  assert(uaud_write_wave(round, written, 8000, 2, RoundFrames, 8) == UAUD_ERR_ARG);
+  assert(uaud_write_wave(round, written, 8000, 2, RoundFrames, 32) == UAUD_ERR_ARG);
+  assert(uaud_write_wave(round, written, 0, 2, RoundFrames, 16) == UAUD_ERR_ARG);
+
+  /* A shifted copy of a fingerprint still matches, which a plain comparison
+   * would miss. */
+  {
+    const unsigned int base[6] = {1u, 2u, 3u, 4u, 5u, 6u};
+    const unsigned int shifted[4] = {3u, 4u, 5u, 6u};
+    const double flat = uaud_similarity(base, 6, shifted, 4);
+    const double best = uaud_offset_similarity(base, 6, shifted, 4, 8);
+    assert(best >= flat);
+    assert(best > 0.999);
+    assert(uaud_offset_similarity(NULL, 0, shifted, 4, 8) == 0.0);
+  }
+
+  remove(round);
   remove(tagged);
   remove(path);
   remove(other);
