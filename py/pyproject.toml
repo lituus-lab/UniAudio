@@ -7,12 +7,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "uniaudio"
 version = "0.1.0"
-description = "Python binding for the UniAudio C library"
+description = "Audio containers, patent-free decoders, tags and acoustic fingerprinting"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
 authors = [{ name = "lbartoletti" }]
-keywords = ["nim", "c-extension", "template"]
+keywords = ["audio", "flac", "mp3", "vorbis", "alac", "id3", "fingerprint"]
 classifiers = [
   "Development Status :: 2 - Pre-Alpha",
   "Intended Audience :: Developers",
@@ -23,7 +23,9 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
   "Programming Language :: C",
-  "Topic :: Software Development :: Libraries",
+  "Topic :: Multimedia :: Sound/Audio",
+  "Topic :: Multimedia :: Sound/Audio :: Analysis",
+  "Topic :: Multimedia :: Sound/Audio :: Conversion",
 ]
 dependencies = []
 
