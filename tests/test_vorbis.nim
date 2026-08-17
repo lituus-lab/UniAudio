@@ -69,6 +69,14 @@ suite "vorbis refuses what it cannot decode":
       reason = failure.msg
     check reason.contains("flac")
 
+  test "an Ogg carrying Opus names it rather than failing as bad Vorbis":
+    var reason = ""
+    try:
+      discard readVorbisFile(Fixtures / "stereo-opus.ogg")
+    except AudioError as failure:
+      reason = failure.msg
+    check reason.contains("opus")
+
   test "bytes that are not an Ogg file at all":
     expect AudioError:
       discard readVorbis("RIFF____WAVEfmt ")

@@ -32,9 +32,8 @@ type
   AudioTrack* = object
     ## One audio track, and where each of its coded frames lives.
     entry*: SampleEntry
-    offsets*: seq[int]         ## byte offset of each sample in the file
-    sizes*: seq[int]           ## byte length of each sample
-    framesPerSample*: seq[int] ## decoded frames each sample carries
+    offsets*: seq[int] ## byte offset of each sample in the file
+    sizes*: seq[int]   ## byte length of each sample
 
 proc beU16(data: string; offset: int): int =
   (int(uint8(data[offset])) shl 8) or int(uint8(data[offset + 1]))
@@ -105,7 +104,6 @@ proc parseSampleTable(data: string; stbl, stblEnd: int;
                       track: var AudioTrack; fileLen: int) =
   var sizes: seq[int]
   var chunkOffsets: seq[int]
-  var perFrame: seq[int]
   # stsc maps a run of chunks to a samples-per-chunk count.
   var chunkRuns: seq[tuple[firstChunk, samplesPerChunk: int]]
 
@@ -149,18 +147,15 @@ proc parseSampleTable(data: string; stbl, stblEnd: int;
         chunkRuns.add (int(beU32(data, body + 8 + index * 12)),
                        int(beU32(data, body + 8 + index * 12 + 4)))
     of "stts":
+      # How many frames each sample carries. A decoder gets that from the
+      # frames themselves, so only the table's shape is checked here: expanding
+      # it would mean one integer per sample, for nothing.
       if body + 8 > bodyEnd: continue
       let count = int(beU32(data, body + 4))
       if count < 0 or count > MaxSamples:
         raise newException(AudioError, "mp4: implausible stts count")
       if body + 8 + count * 8 > bodyEnd:
         raise newException(AudioError, "mp4: stts is truncated")
-      for index in 0 ..< count:
-        let runLength = int(beU32(data, body + 8 + index * 8))
-        let delta = int(beU32(data, body + 8 + index * 8 + 4))
-        if runLength < 0 or runLength > MaxSamples:
-          raise newException(AudioError, "mp4: implausible stts run")
-        for _ in 0 ..< runLength: perFrame.add delta
     else: discard
 
   if sizes.len == 0 or chunkOffsets.len == 0 or chunkRuns.len == 0:
@@ -184,7 +179,6 @@ proc parseSampleTable(data: string; stbl, stblEnd: int;
       inc sample
   if sample < sizes.len:
     raise newException(AudioError, "mp4: fewer chunks than samples")
-  track.framesPerSample = perFrame
 
 proc readAudioTrack*(data: string): AudioTrack =
   ## The first audio track of an ISOBMFF file, with its sample entry and the
