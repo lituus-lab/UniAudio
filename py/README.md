@@ -35,7 +35,7 @@ writes.
 
 `probe` returns `(sample_rate, channels, frames)`, where `frames` counts per
 channel. WAV, AIFF, FLAC, ALAC in MP4, Vorbis in Ogg and MP3 all decode; a
-container holding a codec this library will not decode — AAC, Opus — raises a
+container holding a codec this library does not decode — AAC, Opus — raises a
 `UniAudioError` naming the codec it found.
 
 Two recordings can be compared by how they sound rather than by their bytes,

@@ -10,7 +10,7 @@ import pytest
 
 from uniaudio import (UniAudioError, decode, decode_resampled, fingerprint,
                       offset_similarity, probe, similarity, sniff, tags,
-                      version, wave_probe, write_wave)
+                      version, wave_probe, write_flac, write_wave)
 
 FIXTURES = pathlib.Path(__file__).resolve().parents[2] / "tests" / "fixtures"
 
@@ -194,3 +194,20 @@ def test_write_wave_refuses_a_depth_the_writer_does_not_implement(tmp_path):
     for bits in (8, 32):
         with pytest.raises(UniAudioError):
             write_wave(tmp_path / f"d{bits}.wav", [0.0, 0.1], 8000, 1, bits)
+
+
+def test_a_written_flac_reads_back_exactly(tmp_path):
+    rate, channels, frames, samples = decode(FIXTURES / "stereo16.wav")
+    path = tmp_path / "out.flac"
+    write_flac(path, samples, rate, channels, 16)
+    assert sniff(path) == "flac"
+    back_rate, back_channels, back_frames, back = decode(path)
+    assert (back_rate, back_channels, back_frames) == (rate, channels, frames)
+    assert max(abs(a - b) for a, b in zip(samples, back)) < 1.0 / 30000.0
+
+
+def test_a_written_flac_is_smaller_than_the_wav_it_came_from(tmp_path):
+    rate, channels, frames, samples = decode(FIXTURES / "tone16.wav")
+    path = tmp_path / "tone.flac"
+    write_flac(path, samples, rate, channels, 16)
+    assert path.stat().st_size < (FIXTURES / "tone16.wav").stat().st_size

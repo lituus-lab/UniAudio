@@ -29,6 +29,9 @@ cdef extern from "UniAudio.h":
     int uaud_write_wave(const char *path, const float *samples,
                         int sample_rate, int channels, long long frames,
                         int bits_per_sample)
+    int uaud_write_flac(const char *path, const float *samples,
+                        int sample_rate, int channels, long long frames,
+                        int bits_per_sample)
     double uaud_offset_similarity(const unsigned int *a, int a_count,
                                   const unsigned int *b, int b_count,
                                   int max_shift)
@@ -140,6 +143,33 @@ def write_wave(path, samples, sample_rate, channels, bits_per_sample=16):
         raise ValueError("nothing to write")
     cdef bytes encoded = str(path).encode("utf-8")
     cdef int status = uaud_write_wave(encoded, &view[0], sample_rate, channels,
+                                     count // channels, bits_per_sample)
+    if status != 0:
+        raise UniAudioError(status,
+                            uaud_last_error().decode("utf-8", "replace"))
+
+
+def write_flac(path, samples, sample_rate, channels, bits_per_sample=16):
+    """Encode interleaved floats to a native FLAC file, losslessly.
+
+    `bits_per_sample` is 8, 16 or 24. Fixed predictors, so the file is larger
+    than the reference encoder's default and decodes to exactly the same
+    samples.
+    """
+    cdef const float[::1] view
+    try:
+        view = samples
+    except (TypeError, ValueError, BufferError):
+        view = _array.array("f", samples)
+    cdef Py_ssize_t count = view.shape[0]
+    if channels <= 0:
+        raise ValueError("channels must be positive")
+    if count % channels:
+        raise ValueError("sample count is not a whole number of frames")
+    if count == 0:
+        raise ValueError("nothing to write")
+    cdef bytes encoded = str(path).encode("utf-8")
+    cdef int status = uaud_write_flac(encoded, &view[0], sample_rate, channels,
                                      count // channels, bits_per_sample)
     if status != 0:
         raise UniAudioError(status,

@@ -39,6 +39,7 @@ happened to ask for. Reachable from C, and from Python:
 | the samples themselves | `uaud_decode` |
 | samples mixed to mono, or at another rate | `uaud_decode_resampled` |
 | write a WAV | `uaud_write_wave` |
+| write a FLAC | `uaud_write_flac` |
 | tags, whichever scheme the file uses | `uaud_tags_json` |
 | fingerprint, and compare two of them | `uaud_fingerprint`, `uaud_similarity`, `uaud_offset_similarity` |
 | release what the library allocated | `uaud_free` |
@@ -50,7 +51,9 @@ These stay Nim-side on purpose. They are not gaps waiting for a consumer.
 - **Per-format readers** — `readFlac`, `readAlac`, `readVorbis`, `readMp3`,
   `readWave`, `readAiff`. `uaud_decode` identifies the container from its bytes
   and dispatches. A C caller naming a format it guessed from a file extension
-  would be choosing worse information over better.
+  would be choosing worse information over better. Writing is the other way
+  round: a caller does have to say which format it wants, so each writer has
+  its own entry point.
 - **Container plumbing** — `oggPackets`, `readAudioTrack`, `sampleData`,
   `boxes`, `findBox`, `parseMagicCookie`. These exist so the codecs above them
   can be written; they describe a file's internal structure, which is not what

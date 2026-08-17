@@ -16,16 +16,16 @@ codec — most of what a personal library holds is decodable freely.
 
 | Codec | Read | Write | Limitations |
 |---|:---:|:---:|---|
-| WAV (RIFF) | yes | yes | Reads integer PCM at 8, 16, 24 and 32 bits and IEEE float at 32 and 64, including `WAVE_FORMAT_EXTENSIBLE`. Writes 16- or 24-bit integer PCM only, clamping samples outside [-1, 1] rather than letting them wrap. |
+| WAV (RIFF) | yes | yes | Reads integer PCM at 8, 16, 24 and 32 bits and IEEE float at 32 and 64, including `WAVE_FORMAT_EXTENSIBLE`. Writes 16- or 24-bit integer PCM, clamping samples outside [-1, 1] rather than letting them wrap. |
 | AIFF, AIFF-C | yes | no | Uncompressed only — `NONE`, `twos`, `sowt`, `fl32`. Any other AIFF-C compression is refused, named. 8, 16, 24 and 32 bits. |
-| FLAC | yes | no | Native stream only; FLAC inside Ogg is refused. 1 to 8 channels, 4 to 32 bits. |
+| FLAC | yes | yes | Reads a native stream, 1 to 8 channels, 4 to 32 bits; FLAC inside Ogg is refused. Writes a native stream at 8, 16 or 24 bits with fixed predictors — the size `flac -0` gives, where `flac -8` is 1.2 to 1.6 times smaller because it fits an LPC model per frame. |
 | ALAC | yes | no | Inside MP4. Mono and stereo only; 16, 20, 24 or 32 bits. |
 | Vorbis | yes | no | Inside Ogg. Floor type 0 is refused rather than approximated — no encoder has produced it since 2004. Up to 16 channels. |
 | MP3 | yes | no | Layer III only; Layers I and II are refused, named. MPEG-1, 2 and 2.5. Encoder padding is trimmed when a LAME or Xing tag records it, and left alone when nothing does. |
-| Opus | no | no | Not written yet — no licence stands in the way. An Ogg carrying it is refused with the codec named. |
-| Speex, Theora | no | no | Not written yet. Recognised by the same check that names Opus, so an Ogg carrying one is refused rather than misread as Vorbis. |
-| AAC | no | no | Not implemented, and will not be: an active patent licence for a marginal gain here. An MP4 carrying it says `mp4a`. |
-| WMA | no | no | Not implemented, and will not be: proprietary. |
+| Opus | no | no | Not implemented. No licence stands in the way. An Ogg holding it is refused with the codec named. |
+| Speex, Theora | no | no | Not implemented. Recognised by the same check that names Opus, so an Ogg holding one is refused rather than misread as Vorbis. |
+| AAC | no | no | Not implemented. It carries an active patent licence, which every consumer of this library would inherit. An MP4 holding it says `mp4a`. |
+| WMA | no | no | Not implemented. The format is proprietary and has no published specification to work from. |
 
 Where a format is free to implement, that is why it is here: FLAC and Vorbis are
 royalty-free by design, Apple published the ALAC reference decoder under Apache
