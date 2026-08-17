@@ -10,7 +10,7 @@ Audio containers, patent-free decoders and acoustic fingerprinting::
 """
 from ._core import (UniAudioError, decode, decode_resampled, fingerprint,
                     offset_similarity, probe, similarity, sniff, tags,
-                    version as _version_c, wave_probe, write_flac,
+                    version as _version_c, wave_probe, write_alac, write_flac,
                     write_wave)
 
 __version__ = _version_c().decode("ascii")
@@ -23,5 +23,5 @@ def version():
 
 __all__ = ["UniAudioError", "decode", "decode_resampled", "fingerprint",
            "offset_similarity", "probe", "similarity", "sniff", "tags",
-           "version", "wave_probe", "write_flac", "write_wave",
+           "version", "wave_probe", "write_alac", "write_flac", "write_wave",
            "__version__"]

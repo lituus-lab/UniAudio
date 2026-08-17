@@ -226,6 +226,38 @@ proc uaud_write_flac(path: cstring; samples: ptr cfloat; sampleRate,
     lastError = getCurrentExceptionMsg()
     result = cint(uaudErrFormat)
 
+proc uaud_write_alac(path: cstring; samples: ptr cfloat; sampleRate,
+                     channels: cint; frames: clonglong;
+                     bitsPerSample: cint): cint {.exportc, cdecl, dynlib.} =
+  ## Encode interleaved floats to an `.m4a` holding one ALAC track, losslessly.
+  if path == nil or samples == nil:
+    lastError = "path and samples must be non-null"
+    return cint(uaudErrArg)
+  if sampleRate <= 0 or sampleRate > cint(MaxSampleRate) or channels <= 0 or
+      channels > 2 or frames <= 0:
+    lastError = "sample rate, channel count or frame count out of range"
+    return cint(uaudErrArg)
+  if bitsPerSample notin [cint(16), cint(24)]:
+    lastError = "bits per sample must be 16 or 24"
+    return cint(uaudErrArg)
+  try:
+    var buffer = initAudioBuffer(int(sampleRate), int(channels), int(frames))
+    let source = cast[ptr UncheckedArray[cfloat]](samples)
+    for index in 0 ..< buffer.samples.len:
+      buffer.samples[index] = float32(source[index])
+    writeAlacFile($path, buffer, int(bitsPerSample))
+    lastError = ""
+    result = cint(uaudOk)
+  except AudioError as error:
+    lastError = error.msg
+    result = cint(uaudErrFormat)
+  except IOError, OSError:
+    lastError = getCurrentExceptionMsg()
+    result = cint(uaudErrIo)
+  except CatchableError, Defect:
+    lastError = getCurrentExceptionMsg()
+    result = cint(uaudErrFormat)
+
 proc uaud_free(buffer: pointer) {.exportc, cdecl, dynlib.} =
   ## Release a buffer this library allocated. NULL is accepted.
   if buffer != nil: dealloc(buffer)
