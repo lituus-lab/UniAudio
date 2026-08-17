@@ -167,16 +167,24 @@ task coverage, "LCOV + HTML coverage report for the Nim sources (needs lcov)":
   let cache = "build/covcache"
   rmDir cache
   rmDir "coverage"
-  # Every suite, into one cache so the gcov counters accumulate: a report drawn
-  # from a single test file would describe two modules and be labelled as the
-  # library.
+  # One cache per suite, then a merge. Compiling several suites into a shared
+  # nimcache replaces the gcov files rather than adding to them, and the report
+  # ends up describing whichever suite was built last — a module its own tests
+  # cover well then reads as zero.
+  var pieces: seq[string]
   for suite in ["pcm", "aiff", "flac", "alac", "ogg", "vorbis", "mp3", "tags",
-                "fingerprint"]:
-    exec "nim c --path:src --nimcache:" & cache &
+                "fingerprint", "robustness"]:
+    let here = cache & "/" & suite
+    exec "nim c --path:src --nimcache:" & here &
          " --debugger:native --passC:--coverage --passL:--coverage" &
          " -o:build/cov_" & suite & " tests/test_" & suite & ".nim"
     exec "./build/cov_" & suite
-  exec "lcov --capture --directory " & cache & " --base-directory ." &
-       " --include \"*/src/UniAudio/*\" --output-file lcov.info --quiet"
+    let piece = here & ".info"
+    exec "lcov --capture --directory " & here & " --base-directory ." &
+         " --include \"*/src/UniAudio/*\" --output-file " & piece & " --quiet"
+    pieces.add piece
+  var merge = "lcov"
+  for piece in pieces: merge.add " --add-tracefile " & piece
+  exec merge & " --output-file lcov.info --quiet"
   exec "genhtml lcov.info --output-directory coverage --legend --quiet"
   exec "lcov --summary lcov.info"
