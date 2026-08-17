@@ -15,6 +15,7 @@
 import std/[streams, md5, math]
 import contracts
 import ./pcm
+import ./bitio
 
 const
   MaxBlockSize = 65535
@@ -411,24 +412,6 @@ proc readFlacFile*(path: string): AudioBuffer {.contractual.} =
 # Fixed polynomial predictors with Rice-coded residuals: what `flac -0` emits.
 # No LPC, so the files are larger than the reference encoder's default, and
 # exactly as lossless — a decoder cannot tell which predictor family was used.
-
-type BitWriter = object
-  ## MSB-first, matching the reader.
-  data: string
-  bits: int ## how many bits of the last byte are used
-
-proc put(writer: var BitWriter; value: uint64; count: int) =
-  for index in countdown(count - 1, 0):
-    if writer.bits == 0: writer.data.add '\0'
-    let bit = uint8((value shr index) and 1)
-    writer.data[^1] = char(uint8(writer.data[^1]) or (bit shl (7 - writer.bits)))
-    writer.bits = (writer.bits + 1) and 7
-
-proc putSigned(writer: var BitWriter; value: int64; count: int) =
-  writer.put(cast[uint64](value) and ((1'u64 shl count) - 1), count)
-
-proc alignByte(writer: var BitWriter) =
-  while writer.bits != 0: writer.put(0, 1)
 
 func crc8(data: openArray[char]): uint8 =
   ## Polynomial 0x07 over the frame header, as FLAC specifies.
