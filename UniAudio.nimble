@@ -12,7 +12,7 @@ srcDir        = "src"
 requires "nim >= 2.0.0"
 requires "https://github.com/lbartoletti/NimContracts#main"
 # Native float mathematics: one dependency surface for the whole family.
-requires "https://github.com/lituus-lab/UniMath#feat/native-float-math"
+requires "https://github.com/lituus-lab/UniMath#main"
 
 task lint, "Fail if nimpretty would reformat a source":
   exec "nim c -r --hints:off -o:build/lint_tool tools/lint.nim"
