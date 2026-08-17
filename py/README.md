@@ -21,6 +21,18 @@ uniaudio.probe("tagged.m4a")           # (44100, 1, 9000)
 uniaudio.tags("tagged.m4a")["title"]   # 'Été à Nice'
 ```
 
+`decode` returns the samples themselves, as one `array.array('f')` of
+interleaved values in [-1, 1]:
+
+```python
+rate, channels, frames, samples = uniaudio.decode("tagged.m4a")
+len(samples) == frames * channels      # True
+```
+
+`decode_resampled(path, target_rate, to_mono)` mixes and resamples in the same
+pass, and `write_wave` is the one way out — WAV is the only format this library
+writes.
+
 `probe` returns `(sample_rate, channels, frames)`, where `frames` counts per
 channel. WAV, AIFF, FLAC, ALAC in MP4, Vorbis in Ogg and MP3 all decode; a
 container holding a codec this library will not decode — AAC, Opus — raises a

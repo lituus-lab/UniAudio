@@ -14,23 +14,72 @@ A media catalogue needs three things from an audio file: what it is, how long
 it is, and something it can be recognised by. None of that requires a licensed
 codec — most of what a personal library holds is decodable freely.
 
-| Decoded | Why it is free to implement |
-|---|---|
-| WAV, AIFF | uncompressed |
-| FLAC | royalty-free, reference implementation is BSD |
-| ALAC | Apple published the reference decoder under Apache 2.0 |
-| Vorbis | royalty-free by design |
-| MP3 | last patents expired in 2017 |
+| Codec | Read | Write | Limitations |
+|---|:---:|:---:|---|
+| WAV (RIFF) | yes | yes | Reads integer PCM at 8, 16, 24 and 32 bits and IEEE float at 32 and 64, including `WAVE_FORMAT_EXTENSIBLE`. Writes 16- or 24-bit integer PCM only, clamping samples outside [-1, 1] rather than letting them wrap. |
+| AIFF, AIFF-C | yes | no | Uncompressed only — `NONE`, `twos`, `sowt`, `fl32`. Any other AIFF-C compression is refused, named. 8, 16, 24 and 32 bits. |
+| FLAC | yes | no | Native stream only; FLAC inside Ogg is refused. 1 to 8 channels, 4 to 32 bits. |
+| ALAC | yes | no | Inside MP4. Mono and stereo only; 16, 20, 24 or 32 bits. |
+| Vorbis | yes | no | Inside Ogg. Floor type 0 is refused rather than approximated — no encoder has produced it since 2004. Up to 16 channels. |
+| MP3 | yes | no | Layer III only; Layers I and II are refused, named. MPEG-1, 2 and 2.5. Encoder padding is trimmed when a LAME or Xing tag records it, and left alone when nothing does. |
+| Opus | no | no | Not written yet — no licence stands in the way. An Ogg carrying it is refused with the codec named. |
+| Speex, Theora | no | no | Not written yet. Recognised by the same check that names Opus, so an Ogg carrying one is refused rather than misread as Vorbis. |
+| AAC | no | no | Not implemented, and will not be: an active patent licence for a marginal gain here. An MP4 carrying it says `mp4a`. |
+| WMA | no | no | Not implemented, and will not be: proprietary. |
 
-**AAC and WMA are not decoded**, and will not be. AAC is under an active
-licence for a marginal gain here; WMA is proprietary. Opus and Speex are absent
-for a different reason — no licence stands in their way, they simply are not
-written yet.
+Where a format is free to implement, that is why it is here: FLAC and Vorbis are
+royalty-free by design, Apple published the ALAC reference decoder under Apache
+2.0 with the patent grant that licence carries, and MP3's last patents expired
+in 2017.
 
 A file this library cannot decode is reported rather than guessed at, and the
-report names what was found: an `.m4a` holding ALAC is read, the same file
-holding AAC says `mp4a`; an Ogg holding Opus says so instead of failing as
+report names what was found. An `.m4a` holding ALAC is read; the same file
+holding AAC says `mp4a`. An Ogg holding Opus says so, instead of failing as
 though it were broken Vorbis.
+
+## What's inside
+
+- **Sample buffers** — `src/UniAudio/pcm.nim`. One interleaved float32 shape
+  every decoder produces, plus channel mixing and rate conversion.
+- **Uncompressed containers** — `src/UniAudio/riff.nim`,
+  `src/UniAudio/aiff.nim`. WAV is the one format written as well as read.
+- **Lossless codecs** — `src/UniAudio/flac.nim`, `src/UniAudio/alac.nim` over
+  `src/UniAudio/isobmff.nim`, which finds the coded frames inside an MP4.
+- **Lossy codecs** — `src/UniAudio/vorbis.nim` over `src/UniAudio/ogg.nim`,
+  and `src/UniAudio/mp3.nim` with its tables in
+  `src/UniAudio/mp3_tables.nim`.
+- **Tags** — `src/UniAudio/tags.nim`. ID3v1 and v2, Vorbis comments, iTunes
+  atoms, read into one shape.
+- **Recognition** — `src/UniAudio/fingerprint.nim` over
+  `src/UniAudio/fft.nim`: what a recording sounds like, not what its bytes
+  are.
+- **Dispatch** — `src/UniAudio/decode.nim` names a container from its bytes
+  and decodes it; `src/UniAudio/c_api.nim` is the same library in C.
+
+## The Uni* family
+
+UniAudio is layer 3 of `lituus-lab`'s `Uni*` family: a set of Nim libraries,
+each with a C ABI and a Python binding, unified by a shared dependency DAG and
+documentation and testing conventions. See
+[lituus-lab/.github](https://github.com/lituus-lab/.github) for the family's
+purpose and philosophy. UniAudio depends on UniMath (layer 2) for its native
+float façade, and on nothing else in the family — a single edge, so that an
+application decoding audio does not pull in a stack it has no use for.
+
+## Provenance & development
+
+The codecs are ports, not original work, and each names its source in
+[NOTICE](NOTICE): ALAC from Apple's reference decoder (Apache 2.0), MP3 from
+minimp3 (CC0), Vorbis written against the Xiph specification with `stb_vorbis`
+consulted alongside it. FLAC, AIFF and RIFF are written from their published
+formats. The fingerprint is Haitsma and Kalker's, cited in the module that
+implements it.
+
+Development used LLM/agent assistance extensively, on the terms described
+below. One visible consequence: this repo's git history is short and linear,
+with commits landing close together — that reflects an agent pass over formats
+and reference implementations that have existed for decades, not these codecs
+being worked out at that speed from a blank page.
 
 ## Layout
 
@@ -55,7 +104,7 @@ tests/ tests/c/               Nim and C ABI tests
 bench/                        timings, not part of the gate
 py/                           Cython binding + pytest + notebook
 book/index.nim                nimib book, compiled at docs build
-ADRs/                         0001 DAG, 0002 license, 0003 engine&shell, 0004 conventions
+ADRs/                         0001 layers, 0002 licence, 0003 C ABI, 0004 conventions
 ```
 
 ## Build
@@ -68,8 +117,13 @@ nimble lint
 nimble checkVGraph
 ```
 
+## Benchmarks
+
 `nimble bench` measures what each decoder costs; it is not part of the gate.
-See [bench/README.md](bench/README.md) for the numbers and how to read them.
+`nimble benchReadme` runs it and writes the numbers into
+[bench/README.md](bench/README.md), tagged by machine, so nothing there is
+retyped by hand. That file also explains why the per-frame cost is the
+comparable figure and the realtime multiple is not.
 
 ## How the decoders are checked
 
@@ -91,6 +145,51 @@ an independent decoder makes of the same file:
 No module sits below 73% of its lines; the whole library is a little under 89%.
 The figure is not pinned here to a decimal place, because one would go stale on
 the next edit and stop being a measurement.
+
+## CI
+
+`test`, `cabi` and `python` on ubuntu/macOS/Windows. `consume-cabi` and
+`consume-wheel` rebuild against the published artifacts on a machine without
+Nim, so what ships is what was tested — the wheel one decodes a fixture from
+outside the checkout, because importing the extension would succeed while the
+library it needs stayed behind. `coverage`, `docs` and `bench` run on ubuntu;
+`bench` is a smoke test, and no number a shared runner produces is recorded.
+
+`dco` blocks PRs missing a `Signed-off-by` trailer; `commitizen` blocks PRs
+whose commits or title are not
+[Conventional Commits](https://www.conventionalcommits.org/)
+(`CONTRIBUTING.md`).
+
+The same gates run locally with pre-commit: `pip install pre-commit && pre-commit install`
+(`CONTRIBUTING.md`).
+
+`docs` publishes to GitHub Pages only from a public repo.
+
+## AI-assisted contributions
+
+Assistance from AI/LLM tools is welcome on the same terms as any other
+contribution.
+
+- **Accountability.** The human contributor is the author and remains fully
+  responsible for the change. The DCO sign-off (`Signed-off-by`) is the
+  mechanism: by signing you certify the content is yours or properly licensed
+  — this covers AI-assisted work, provided you can stand behind it.
+- **No third-party contamination.** Ensure AI output introduces no code from a
+  third party without a compatible license and attribution. If an LLM
+  reproduced protected material, do not submit it. Every port in this library
+  names its source in [NOTICE](NOTICE).
+- **Correctness is yours.** The gates (tests, `nimble lint`, conventional
+  commits) catch a lot, but you own the result — review and verify what you
+  commit.
+- **Atomic commits.** Each commit is one logical change. A PR may stack
+  several atomic commits (one per element, say) — one monolithic big-bang
+  commit is not.
+- **Disclosure.** State in the PR whether AI assistance was used (see the PR
+  template). It is not a hard requirement — the DCO remains the gate.
+
+## License
+
+Apache-2.0 (`LICENSE`). DCO sign-off on every commit (`CONTRIBUTING.md`).
 
 ## Status
 

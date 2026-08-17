@@ -195,16 +195,23 @@ cannot reach, the Python binding cannot reach either.
 
 int rate, channels;
 long long frames;
-if (uaud_probe("take.flac", &rate, &channels, &frames) != UAUD_OK)
+float *samples;
+if (uaud_decode("take.flac", &rate, &channels, &frames, &samples) != UAUD_OK)
     fprintf(stderr, "%s\n", uaud_last_error());
+else
+    uaud_free(samples);   /* frames * channels interleaved floats */
 ```
 
 ```python
-from uniaudio import probe, tags
+from uniaudio import decode, tags
 
-rate, channels, frames = probe("take.flac")
+rate, channels, frames, samples = decode("take.flac")
 print(tags("take.flac")["title"])
 ```
+
+`samples` comes back as one `array.array('f')`, not a list — a three-minute
+stereo track is sixteen million values, and building a Python object for each
+of them would cost more than the decode.
 
 No Nim exception crosses the C boundary: every entry point returns a status,
 with the reason available from `uaud_last_error`.
