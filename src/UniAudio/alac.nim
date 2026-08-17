@@ -53,6 +53,12 @@ proc initReader(data: string): Reader =
   Reader(data: data & "\0\0\0\0\0", position: 0, limit: data.len * 8)
 
 proc peek32(reader: Reader): uint32 =
+  # The Golomb readers call this directly, without going through `read`, and
+  # they advance the position by whatever the bitstream says. A corrupt frame
+  # drives it past the padding, so the bound is checked here rather than at
+  # every call site.
+  if reader.position < 0 or reader.position + 32 > reader.limit + 8 * 5:
+    raise newException(AudioError, "alac: frame ended early")
   let byteIndex = reader.position shr 3
   var word = 0'u32
   for offset in 0 .. 3:

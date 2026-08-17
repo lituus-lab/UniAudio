@@ -92,8 +92,10 @@ func isValid(h: FrameHeader): bool =
     layerCode(h) != 0 and bitrateIndex(h) != 15 and rateIndex(h) != 3
 
 func sameStream(a, b: FrameHeader): bool =
-  ## Two headers belong to the same stream when version, layer, rate and
-  ## channel mode agree. The bitrate may change from frame to frame.
+  ## Two headers belong to the same stream when version, layer and sample rate
+  ## agree. The bitrate may change from frame to frame, and so, in principle,
+  ## may the channel mode — which is why the caller checks that separately
+  ## rather than reading it from the first header alone.
   isValid(b) and ((a.bytes[1] xor b.bytes[1]) and 0xFE'u8) == 0 and
     ((a.bytes[2] xor b.bytes[2]) and 0x0C'u8) == 0 and
     isFreeFormat(a) == isFreeFormat(b)
@@ -1081,8 +1083,12 @@ proc readMp3*(data: string): AudioBuffer =
       for index in 0 ..< 8: main[borrowed + payloadBytes + index] = '\0'
       var mainBits = initBits(main, borrowed + payloadBytes)
 
-      if decoder.reserv >= mainDataBegin and not tagFrame:
-        let granules = if isMpeg1(h): 2 else: 1
+      # The side information is sized from this frame's own header. A frame
+      # that disagrees with the stream about how many channels it carries is
+      # not decodable alongside the rest, whatever its sync word says.
+      let granules = if isMpeg1(h): 2 else: 1
+      let usable = info.len == granules * channels
+      if decoder.reserv >= mainDataBegin and not tagFrame and usable:
         var pcm = newSeq[float32](granules * GranuleLines * channels)
         for granule in 0 ..< granules:
           for index in 0 ..< gr.len: gr[index] = 0
