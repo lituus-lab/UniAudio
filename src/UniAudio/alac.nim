@@ -56,9 +56,17 @@ type
     limit: int
 
 proc initReader(data: string): Reader =
+  ## A reader over one coded frame, padded with five zero bytes.
+  ##
+  ## The padding is what makes `peek32` safe at the very end: it fetches 32 bits
+  ## from any bit position, so a read starting in the last byte needs four more
+  ## bytes behind it, and an unaligned one a fifth. `limit` stays the real bit
+  ## length, so the padding is readable but never counts as data.
   Reader(data: data & "\0\0\0\0\0", position: 0, limit: data.len * 8)
 
 proc peek32(reader: Reader): uint32 =
+  ## Thirty-two bits from the current position, without consuming them.
+  ##
   # The Golomb readers call this directly, without going through `read`, and
   # they advance the position by whatever the bitstream says. A corrupt frame
   # drives it past the padding, so the bound is checked here rather than at
@@ -76,6 +84,9 @@ proc peek32(reader: Reader): uint32 =
     (word shl shift) or (extra shr (8 - shift))
 
 proc read(reader: var Reader; count: int): uint32 =
+  ## The next `count` bits, most significant first, `count` at most 32. Unlike
+  ## the Golomb readers this checks against the frame's real length, so a header
+  ## field cannot be satisfied out of the padding.
   if count == 0: return 0
   if reader.position + count > reader.limit:
     raise newException(AudioError, "alac: frame ended early")
@@ -167,6 +178,9 @@ proc dynDecompress(reader: var Reader; pb, kb, mb0, maxSize, count: int;
       mb = 0
 
 func signOf(value: int): int =
+  ## -1, 0 or 1. The predictor's coefficient updates move by this and nothing
+  ## else, which is what keeps encoder and decoder in step without any update
+  ## being transmitted — the sign of a difference is something both can compute.
   if value > 0: 1 elif value < 0: -1 else: 0
 
 func signExtend(value, width: int): int =
@@ -394,6 +408,9 @@ proc readAlac*(data: string): AudioBuffer =
         float32(decoded[channel][index]) / scale
 
 proc readAlacFile*(path: string): AudioBuffer {.contractual.} =
+  ## `readAlac` over a file, read whole: an MP4's sample tables sit in `moov`,
+  ## which may follow the audio, so the frames cannot be found from a
+  ## forward-only stream. A path that cannot be opened raises `IOError`.
   require:
     path.len > 0
   body:
@@ -741,6 +758,9 @@ proc writeAlac*(buffer: AudioBuffer; bitsPerSample = 16): string
 
 proc writeAlacFile*(path: string; buffer: AudioBuffer;
                     bitsPerSample = 16) {.contractual.} =
+  ## `writeAlac` to a file, 16 or 24 bits, mono or stereo. A depth or channel
+  ## count this writer does not implement raises `AudioError`; a path that
+  ## cannot be written raises `IOError` from `writeFile`.
   require:
     path.len > 0
   body:

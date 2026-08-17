@@ -17,6 +17,7 @@
 ## A container too broken to walk raises rather than returning nothing: an
 ## empty result would say the file has no tags, which is a different claim.
 
+import contracts
 import ./ogg
 import ./isobmff
 
@@ -37,6 +38,10 @@ type
     other*: seq[tuple[key, value: string]]
 
 func isEmpty*(tags: Tags): bool =
+  ## Whether the file said nothing at all. A file with no tags reads as an empty
+  ## `Tags` rather than raising, so this is how a caller tells "untagged" from
+  ## "tagged with blank fields" — every string empty, every number zero and
+  ## `other` empty.
   tags.title.len == 0 and tags.artist.len == 0 and tags.album.len == 0 and
     tags.albumArtist.len == 0 and tags.composer.len == 0 and
     tags.genre.len == 0 and tags.comment.len == 0 and tags.date.len == 0 and
@@ -51,6 +56,9 @@ func trimmed(text: string): string =
   if last < first: "" else: text[first .. last]
 
 func appendUtf8(target: var string; codepoint: int) =
+  ## Append one code point as UTF-8, in one to four bytes. Tags arrive in three
+  ## encodings — Latin-1, UTF-16 and UTF-8 — and every reader here converts into
+  ## this one shape, so a caller never has to know which the file used.
   if codepoint < 0x80:
     target.add char(codepoint)
   elif codepoint < 0x800:
@@ -67,6 +75,9 @@ func appendUtf8(target: var string; codepoint: int) =
     target.add char(0x80 or (codepoint and 0x3F))
 
 func latin1ToUtf8(text: string): string =
+  ## Latin-1 to UTF-8. Every byte is a valid Latin-1 code point, so this is the
+  ## one reading that cannot fail — which is why ID3v1, whose encoding is not
+  ## recorded anywhere, is read as Latin-1.
   for character in text:
     appendUtf8(result, int(uint8(character)))
 
@@ -126,6 +137,10 @@ func splitCount(text: string): tuple[number, total: int] =
   (number, total)
 
 func upper(text: string): string =
+  ## ASCII upper-casing, for comparing a Vorbis comment's field name. Deliberately
+  ## not `strutils.toUpperAscii`'s locale-free equivalent for the whole string:
+  ## only the names matter, they are ASCII by specification, and mapping bytes
+  ## above 127 would corrupt a UTF-8 name that happens to be compared.
   for character in text:
     result.add(if character in 'a' .. 'z': char(ord(character) - 32)
                else: character)
@@ -164,6 +179,9 @@ func syncsafe(data: string; offset: int): int =
     result = (result shl 7) or (int(uint8(data[offset + index])) and 0x7F)
 
 func beU32(data: string; offset: int): int =
+  ## Big-endian, as ID3v2 writes a frame size. Distinct from the syncsafe reader
+  ## above it: ID3v2.3 frame sizes are plain big-endian, while the tag's own size
+  ## is syncsafe, and reading one as the other is off by up to a factor of 16.
   for index in 0 .. 3:
     result = (result shl 8) or int(uint8(data[offset + index]))
 
@@ -254,6 +272,8 @@ proc readId3v1*(data: string): Tags =
 # --- Vorbis comments --------------------------------------------------------
 
 func leU32(data: string; offset: int): int =
+  ## Little-endian, as a Vorbis comment writes its lengths — the opposite of
+  ## ID3v2, in the same file family.
   for index in countdown(3, 0):
     result = (result shl 8) or int(uint8(data[offset + index]))
 
@@ -373,7 +393,12 @@ proc readTags*(data: string): Tags =
   elif data[4 .. 7] == "ftyp":
     result = readMp4Tags(data)
 
-proc readTagsFile*(path: string): Tags =
-  readTags(readFile(path))
+proc readTagsFile*(path: string): Tags {.contractual.} =
+  ## `readTags` over a file: whichever scheme it carries, read into one shape.
+  ## A file with no tags yields an empty `Tags`, not an error.
+  require:
+    path.len > 0
+  body:
+    readTags(readFile(path))
 
 

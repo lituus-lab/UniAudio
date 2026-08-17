@@ -42,8 +42,13 @@ type
     totalSamples*: int64
 
 proc bitsLeft(reader: BitReader): int = reader.data.len * 8 - reader.position
+  ## Bits between the read position and the end of the buffer. Used to decide
+  ## whether another frame can start, without reading into a raise.
 
 proc readBit(reader: var BitReader): int =
+  ## One bit, most significant first, as FLAC codes everything. Reading past the
+  ## end raises `AudioError` rather than returning zeros, so a truncated frame
+  ## stops here instead of decoding into silence.
   if reader.position >= reader.data.len * 8:
     raise newException(AudioError, "flac: stream ended inside a frame")
   let byteIndex = reader.position shr 3
@@ -52,6 +57,9 @@ proc readBit(reader: var BitReader): int =
   (int(uint8(reader.data[byteIndex])) shr bitIndex) and 1
 
 proc readBits(reader: var BitReader; count: int): uint64 =
+  ## The next `count` bits as an unsigned value. `count` is checked in the body
+  ## rather than by a precondition: the widths come from the stream, so an
+  ## out-of-range one is a malformed file and not a caller's mistake.
   if count < 0 or count > 64:
     raise newException(AudioError, "flac: bit count out of range")
   for _ in 0 ..< count:
@@ -75,6 +83,8 @@ proc readUnary(reader: var BitReader): int =
       raise newException(AudioError, "flac: unary code is implausibly long")
 
 proc alignToByte(reader: var BitReader) =
+  ## Skip to the next byte boundary. A frame's CRC-16 covers whole bytes, so the
+  ## subframes are padded out to one before it.
   reader.position = (reader.position + 7) and not 7
 
 proc readUtf8Number(reader: var BitReader): int64 =
@@ -183,6 +193,13 @@ proc restoreFixed(output: var seq[int64]; order, blockSize, bits: int) =
 
 proc decodeSubframe(reader: var BitReader; blockSize, bitsPerSample: int;
                     output: var seq[int64]) =
+  ## One channel of one frame, in whichever of the four subframe kinds it used:
+  ## CONSTANT (a single value), VERBATIM (raw samples), FIXED (a polynomial
+  ## predictor of order 0 to 4) or LPC (a transmitted filter).
+  ##
+  ## "Wasted bits" are low bits every sample in the subframe has as zero — a
+  ## 16-bit stream carrying 14 bits of real signal, say. They are coded once and
+  ## shifted back on at the end, so the predictor works at the narrower width.
   if reader.readBit() != 0:
     raise newException(AudioError, "flac: subframe padding bit is set")
   let kind = int(reader.readBits(6))
@@ -200,6 +217,11 @@ proc decodeSubframe(reader: var BitReader; blockSize, bitsPerSample: int;
     for index in 0 ..< blockSize: output[index] = reader.readSigned(bits)
   elif kind >= 8 and kind <= 12: # FIXED
     let order = kind - 8
+    # A predictor needs as many warm-up samples as its order, and they are
+    # written into a block sized by the frame header. A block too short for
+    # them is a contradiction the file states about itself.
+    if order > blockSize:
+      raise newException(AudioError, "flac: predictor order above block size")
     for index in 0 ..< order: output[index] = reader.readSigned(bits)
     decodeResidual(reader, order, blockSize, output)
     restoreFixed(output, order, blockSize, bits)
@@ -207,6 +229,8 @@ proc decodeSubframe(reader: var BitReader; blockSize, bitsPerSample: int;
     let order = kind - 31
     if order > MaxLpcOrder:
       raise newException(AudioError, "flac: LPC order above 32")
+    if order > blockSize:
+      raise newException(AudioError, "flac: LPC order above block size")
     for index in 0 ..< order: output[index] = reader.readSigned(bits)
     let precision = int(reader.readBits(4)) + 1
     if precision == 16:
@@ -257,6 +281,10 @@ proc sampleSizeFrom(code: int): int =
   else: 0
 
 proc readStreamInfo(data: string): StreamInfo =
+  ## The mandatory first metadata block: rate, channel count, bit depth and
+  ## total sample count. The block-size and frame-size bounds are read and
+  ## dropped — every frame declares its own, and a STREAMINFO that disagrees is
+  ## not worth trusting over the frame in hand.
   if data.len < 34:
     raise newException(AudioError, "flac: STREAMINFO is too short")
   var reader = BitReader(data: data)
@@ -401,6 +429,8 @@ proc readFlac*(data: string): AudioBuffer =
         float32(decoded[channel][index]) / scale
 
 proc readFlacFile*(path: string): AudioBuffer {.contractual.} =
+  ## `readFlac` over a file. A path that cannot be opened raises `IOError`,
+  ## which is what separates a missing file from a malformed one.
   require:
     path.len > 0
   body:
@@ -449,6 +479,8 @@ func rateCode(rate: int): int =
   else: 13
 
 func depthCode(bits: int): int =
+  ## The frame header's 3-bit code for a bit depth. 0 means "the depth is in
+  ## STREAMINFO", which is the answer for any width the code cannot name.
   case bits
   of 8: 1
   of 12: 2
@@ -476,6 +508,10 @@ proc putUtf8Number(writer: var BitWriter; value: int) =
     writer.put(0x80'u64 or uint64(value and 0x3F), 8)
 
 func zigzag(value: int64): uint64 =
+  ## Fold a signed residual onto the naturals, small magnitudes first: 0, -1, 1,
+  ## -2, 2 become 0, 1, 2, 3, 4. Rice coding costs a value its magnitude, so
+  ## interleaving the signs this way keeps a residual near zero cheap whichever
+  ## side of zero it falls.
   if value < 0: cast[uint64](-2 * value - 1) else: cast[uint64](2 * value)
 
 func riceBits(values: openArray[int64]; first, last, parameter: int): int =
@@ -547,6 +583,9 @@ proc residualCost(values: openArray[int64]; blockSize, order: int;
 
 proc putResidual(writer: var BitWriter; values: openArray[int64];
                  blockSize, order, partitionOrder: int) =
+  ## The residual, Rice-coded in `2^partitionOrder` partitions, each with the
+  ## parameter that costs it least. Coding method 0 — 4-bit parameters — because
+  ## `bestParameter` never returns one that needs five.
   writer.put(0, 2) # 4-bit Rice parameters
   writer.put(uint64(partitionOrder), 4)
   for (first, last) in partitionRanges(blockSize, order, partitionOrder):
@@ -706,6 +745,9 @@ proc writeFlac*(buffer: AudioBuffer; bitsPerSample = 16): string
 
 proc writeFlacFile*(path: string; buffer: AudioBuffer; bitsPerSample = 16)
     {.contractual.} =
+  ## `writeFlac` to a file, 8, 16 or 24 bits. A depth this writer does not
+  ## implement raises `AudioError`; a path that cannot be written raises
+  ## `IOError` from `writeFile`.
   require:
     path.len > 0
   body:
