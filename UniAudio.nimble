@@ -83,6 +83,12 @@ task testAll, "debug + release + C ABI":
   exec "nimble testRelease"
   exec "nimble ctest"
 
+# Isolated benchmark harness, not in the default gate. Release build so the
+# NimContracts postconditions compile away and the timings reflect the shipped
+# code path. Reads fixtures by relative path, so it runs from the repo root.
+task bench, "Decode and fingerprint benchmarks (release; not in the default gate)":
+  exec "nim c -r -d:release --path:src -o:build/bench_decode bench/bench_decode.nim"
+
 task example, "Nim demo":
   exec "nim c -r --path:src -o:build/demo examples/demo.nim"
 

@@ -52,6 +52,9 @@ nimble lint
 nimble checkVGraph
 ```
 
+`nimble bench` measures what each decoder costs; it is not part of the gate.
+See [bench/README.md](bench/README.md) for the numbers and how to read them.
+
 ## Status
 
 Early. `pcm` and `riff` are complete and tested; the remaining decoders and the
