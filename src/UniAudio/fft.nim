@@ -19,6 +19,9 @@ import contracts
 export complex
 
 func isPowerOfTwo*(n: int): bool =
+  ## Whether `n` is a positive power of two, which is the only length `fft`
+  ## accepts. Zero and negatives answer false: `n and (n - 1)` alone would call
+  ## zero a power of two.
   n > 0 and (n and (n - 1)) == 0
 
 proc bitReverse(values: var seq[Complex[float64]]) =

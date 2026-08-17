@@ -63,11 +63,16 @@ proc pageCrc(data: string; first, last, skipFrom, skipTo: int): uint32 =
     result = (result shl 8) xor
       crcTable[int(((result shr 24) xor uint32(value)) and 0xFF)]
 
+# Ogg writes its page header fields little-endian. Read byte by byte from the
+# top down rather than by casting, so the result does not depend on the host's
+# own byte order or on the offset being aligned.
 func leU32(data: string; offset: int): uint32 =
   for index in countdown(3, 0):
     result = (result shl 8) or uint32(uint8(data[offset + index]))
 
 func leU64(data: string; offset: int): uint64 =
+  ## Eight little-endian bytes: the page's granule position, which for Vorbis is
+  ## the sample count decoded up to the end of that page.
   for index in countdown(7, 0):
     result = (result shl 8) or uint64(uint8(data[offset + index]))
 

@@ -35,15 +35,20 @@ type
     offsets*: seq[int] ## byte offset of each sample in the file
     sizes*: seq[int]   ## byte length of each sample
 
+# ISOBMFF is big-endian throughout. Widened to `int`/`int64` on the way out so a
+# 32-bit size near 2^32, or a 64-bit one, cannot come back negative and slip
+# past a `> 0` check on its way to being used as a length.
 proc beU16(data: string; offset: int): int =
   (int(uint8(data[offset])) shl 8) or int(uint8(data[offset + 1]))
 
 proc beU32(data: string; offset: int): int64 =
+  ## Four big-endian bytes: a box length, a table count, a 32-bit sample offset.
   result = 0
   for index in 0 .. 3:
     result = (result shl 8) or int64(uint8(data[offset + index]))
 
 proc beU64(data: string; offset: int): int64 =
+  ## Eight big-endian bytes: a `co64` offset, or a box whose 32-bit size was 1.
   result = 0
   for index in 0 .. 7:
     result = (result shl 8) or int64(uint8(data[offset + index]))
@@ -102,6 +107,19 @@ proc parseSampleEntry(data: string; start, limit: int): SampleEntry =
 
 proc parseSampleTable(data: string; stbl, stblEnd: int;
                       track: var AudioTrack; fileLen: int) =
+  ## Turn `stbl`'s tables into one offset and one length per coded frame.
+  ##
+  ## The file says where frames live in three pieces that have to be combined:
+  ## `stsz` gives each frame's length, `stco` (or `co64`) the byte offset of each
+  ## *chunk*, and `stsc` how many frames each chunk holds. A frame's offset is
+  ## its chunk's offset plus the lengths of the frames before it in that chunk.
+  ##
+  ## Every number here comes from a table an arbitrary file controls, so each is
+  ## checked before use: counts against `MaxSamples`, table extents against the
+  ## box, and every resulting offset against `fileLen`. `stts` is only
+  ## shape-checked — how many audio frames a coded frame carries is something the
+  ## frames themselves say, so expanding that table would cost one integer per
+  ## frame for nothing.
   var sizes: seq[int]
   var chunkOffsets: seq[int]
   # stsc maps a run of chunks to a samples-per-chunk count.
@@ -216,6 +234,9 @@ proc sampleData*(data: string; track: AudioTrack; index: int): string
     data[track.offsets[index] ..< track.offsets[index] + track.sizes[index]]
 
 func putBE(target: var string; value: int64; width: int) =
+  ## Append `value` as `width` big-endian bytes. Bits above `width` are dropped,
+  ## which is what lets a matrix entry like `0x00010000` be written as four bytes
+  ## and a volume as two without either being masked at the call site.
   for index in countdown(width - 1, 0):
     target.add char(uint8((value shr (index * 8)) and 0xFF))
 

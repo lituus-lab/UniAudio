@@ -14,6 +14,7 @@
 ## Layers I and II are refused. They share a frame header with Layer III and
 ## nothing else, and no encoder in use produces them.
 
+import contracts
 import ./pcm
 import ./mp3_tables
 
@@ -61,28 +62,73 @@ type
 
 # --- frame header -----------------------------------------------------------
 
+# The four header bytes are one packed bit field, and every accessor below picks
+# one part of it out. They are named after what they mean rather than after where
+# they sit, because the layout differs between MPEG-1 and MPEG-2/2.5 and only the
+# meaning is stable. `h.bytes[0]` is the first sync byte and carries nothing else.
+#
+# Byte 1 holds the version and layer, byte 2 the bitrate and rate indices and the
+# padding flag, byte 3 the channel mode and its extension.
+
 func isMono(h: FrameHeader): bool = (h.bytes[3] and 0xC0'u8) == 0xC0'u8
+  ## Mode 3, single channel. Mode 0 to 2 all carry two.
 func isMsStereo(h: FrameHeader): bool = (h.bytes[3] and 0xE0'u8) == 0x60'u8
+  ## Joint stereo with mid/side coding switched on for this frame.
 func isIStereo(h: FrameHeader): bool = (h.bytes[3] and 0x10'u8) != 0
+  ## Joint stereo with intensity coding, which stores one channel above some
+  ## band as a position rather than as a spectrum.
 func testMsStereo(h: FrameHeader): bool = (h.bytes[3] and 0x20'u8) != 0
+  ## The mid/side bit alone, without requiring joint stereo — the two extension
+  ## bits are independent and either may be set.
 func hasCrc(h: FrameHeader): bool = (h.bytes[1] and 1'u8) == 0
+  ## Inverted in the format: the bit is *clear* when a 16-bit CRC follows the
+  ## header. Reading it the obvious way puts every field two bytes out.
 func hasPadding(h: FrameHeader): bool = (h.bytes[2] and 2'u8) != 0
+  ## Whether this frame carries one extra byte, which is how a stream holds an
+  ## average bitrate that the frame size cannot express exactly.
 func isMpeg1(h: FrameHeader): bool = (h.bytes[1] and 8'u8) != 0
+  ## MPEG-1 rather than MPEG-2 or 2.5. It selects the bitrate table, the
+  ## granule count and the side-info layout, so almost everything depends on it.
 func notMpeg25(h: FrameHeader): bool = (h.bytes[1] and 0x10'u8) != 0
+  ## Clear only for MPEG-2.5, an unofficial extension that halves the MPEG-2
+  ## rates again. Named for the sense the bit has, so no reader inverts it.
 func layerCode(h: FrameHeader): int = int((h.bytes[1] shr 1) and 3'u8)
+  ## 3 for Layer I, 2 for Layer II, 1 for Layer III — the format numbers them
+  ## downwards. 0 is reserved and `isValid` refuses it.
 func bitrateIndex(h: FrameHeader): int = int(h.bytes[2] shr 4)
+  ## Index into the bitrate table. 0 means free format — the frame length is
+  ## measured rather than looked up — and 15 is reserved.
 func rateIndex(h: FrameHeader): int = int((h.bytes[2] shr 2) and 3'u8)
+  ## Which of the three sample rates, before the version halving.
 func myRateIndex(h: FrameHeader): int =
+  ## The rate index widened to 0..8 by folding the two version bits in, which is
+  ## how the scalefactor band tables are indexed: they need version and rate
+  ## together, not either alone.
   rateIndex(h) + (int((h.bytes[1] shr 3) and 1'u8) +
                   int((h.bytes[1] shr 4) and 1'u8)) * 3
 func isFrame576(h: FrameHeader): bool = (h.bytes[1] and 14'u8) == 2'u8
+  ## Layer III under MPEG-2 or 2.5, which carries one granule of 576 samples
+  ## where MPEG-1 carries two.
 func isLayer1(h: FrameHeader): bool = (h.bytes[1] and 6'u8) == 6'u8
+  ## Layer I. Its frames are not decoded here, but its length arithmetic differs,
+  ## so the frame walker still has to recognise it in order to step over it.
 func isFreeFormat(h: FrameHeader): bool = (h.bytes[2] and 0xF0'u8) == 0
+  ## Bitrate index 0: the frame length is whatever the distance to the next sync
+  ## turns out to be, so it has to be measured once and then assumed constant.
 
 func headerAt(data: string; offset: int): FrameHeader =
+  ## The four header bytes at `offset`, copied out so the accessors above need no
+  ## bounds check of their own. The caller has already checked the offset.
   for index in 0 .. 3: result.bytes[index] = uint8(data[offset + index])
 
 func isValid(h: FrameHeader): bool =
+  ## Whether these four bytes can begin a frame: eleven or twelve sync bits, a
+  ## layer that is not the reserved 0, a bitrate index that is not the reserved
+  ## 15, and a rate index that is not the reserved 3.
+  ##
+  ## Eleven sync bits alone appear about once every two kilobytes of arbitrary
+  ## data, which is why the reserved values are checked too and why the frame
+  ## walker confirms a second header follows where the first says it should.
   h.bytes[0] == 0xFF'u8 and
     ((h.bytes[1] and 0xF0'u8) == 0xF0'u8 or
      (h.bytes[1] and 0xFE'u8) == 0xE2'u8) and
@@ -106,27 +152,43 @@ const HalfRate: array[2, array[3, array[15, int]]] = [
    [0, 16, 32, 48, 64, 80, 96, 112, 128, 144, 160, 176, 192, 208, 224]]]
 
 func bitrateKbps(h: FrameHeader): int =
+  ## Kilobits per second. The table stores halves so that every MPEG-2 entry is a
+  ## whole number, hence the doubling.
   2 * HalfRate[if isMpeg1(h): 1 else: 0][layerCode(h) - 1][bitrateIndex(h)]
 
 func sampleRateHz(h: FrameHeader): int =
+  ## The three base rates, halved once for MPEG-2 and twice for MPEG-2.5.
   result = SampleRates[rateIndex(h)]
   if not isMpeg1(h): result = result shr 1
   if not notMpeg25(h): result = result shr 1
 
 func frameSamples(h: FrameHeader): int =
+  ## Samples per channel in one frame: 384 for Layer I, 1152 for Layer III under
+  ## MPEG-1 (two granules), 576 under MPEG-2 and 2.5 (one).
   if isLayer1(h): 384 else: (if isFrame576(h): 576 else: 1152)
 
 func frameBytes(h: FrameHeader; freeFormat: int): int =
+  ## The frame's length, padding excluded — the caller adds that.
+  ##
+  ## `125` is 1000/8: the bitrate is in kilobits and this is in bytes. Layer I
+  ## frames are a whole number of four-byte slots, so its result is rounded down
+  ## to one. A free-format frame computes to zero and takes the measured length
+  ## the caller passes in.
   result = frameSamples(h) * bitrateKbps(h) * 125 div sampleRateHz(h)
   if isLayer1(h): result = result and not 3
   if result == 0: result = freeFormat
 
 func padding(h: FrameHeader): int =
+  ## The extra bytes the padding bit adds: one slot, which is four bytes for
+  ## Layer I and one for the others.
   if hasPadding(h): (if isLayer1(h): 4 else: 1) else: 0
 
 # --- bit reader -------------------------------------------------------------
 
 proc initBits(data: string; bytes: int): Bits =
+  ## A reader over `bytes` bytes of `data`. The limit is given rather than taken
+  ## from the string's length because the main-data of a frame may be a slice of
+  ## a longer buffer assembled from the bit reservoir.
   Bits(data: data, pos: 0, limit: bytes * 8)
 
 proc getBits(bits: var Bits; count: int): uint32 =
@@ -152,6 +214,10 @@ proc getBits(bits: var Bits; count: int): uint32 =
 # --- side information -------------------------------------------------------
 
 func scfRow(table: openArray[uint8]; index, width: int): seq[uint8] =
+  ## One row of a scalefactor-band table, which the tables store flattened. The
+  ## rows are ragged, so `width` comes from the caller rather than from the
+  ## table: `mp3_tables` pads each row out as C would, and reading a row at the
+  ## wrong width silently mixes two sample rates' band edges.
   result = newSeq[uint8](width)
   for offset in 0 ..< width: result[offset] = table[index * width + offset]
 
@@ -231,6 +297,12 @@ proc readScalefactors(scf: var array[40, uint8];
                       istPos: var array[39, uint8];
                       size: array[4, int]; counts: openArray[uint8];
                       countBase: int; bits: var Bits; scfsi: int) =
+  ## The scalefactors of one granule, in four parts of `size[part]` bits each.
+  ##
+  ## `scfsi` is the scalefactor selection information: a set bit says this
+  ## granule reuses the previous granule's values for that part rather than
+  ## coding its own, which is why the previous values arrive in `istPos` and are
+  ## copied back out. A part of zero width means every band in it is zero.
   var scfsi = scfsi
   var at = 0
   var istAt = 0
@@ -274,6 +346,12 @@ func ldexpQ2(value: float32; exponent: int): float32 =
 proc decodeScalefactors(h: FrameHeader; istPos: var array[39, uint8];
                         bits: var Bits; gr: GranuleInfo;
                         scf: var array[40, float32]; channel: int) =
+  ## Read this granule's scalefactors and fold them together with the global
+  ## gain into one linear multiplier per band, ready for the dequantiser.
+  ##
+  ## MPEG-1 and MPEG-2 partition the bands differently, and a short-block granule
+  ## differently again, which is what `partition` selects. Returning a linear
+  ## gain is what keeps exponentiation out of the per-line spectrum loop.
   let partition = (if gr.nShortSfb != 0: 1 else: 0) +
                   (if gr.nLongSfb == 0: 1 else: 0)
   var countBase = partition * 28
@@ -350,6 +428,12 @@ type HuffReader = object
   sh: int
 
 proc initHuff(bits: Bits): HuffReader =
+  ## A 32-bit sliding cache over the same bytes `bits` reads.
+  ##
+  ## The Huffman loop peeks up to 24 bits and then consumes a variable number, so
+  ## a per-bit reader would dominate the decode. This keeps the next 32 bits in a
+  ## register, left-aligned, and refills a byte at a time; `sh` counts how many
+  ## bits of the cache are still unfilled, which is why it starts negative.
   result.data = bits.data
   result.next = bits.pos shr 3
   var word = 0'u32
@@ -360,13 +444,19 @@ proc initHuff(bits: Bits): HuffReader =
   result.next += 4
 
 func peek(reader: HuffReader; count: int): int =
+  ## The next `count` bits without consuming them — the codeword lookup needs to
+  ## see a maximum-length code before it knows how long the real one is.
   if count <= 0: 0 else: int(reader.cache shr (32 - count))
 
 proc flush(reader: var HuffReader; count: int) =
+  ## Consume `count` bits already peeked at. It does not refill: the caller
+  ## flushes several times and refills once, which is the point of the cache.
   reader.cache = reader.cache shl count
   reader.sh += count
 
 proc refill(reader: var HuffReader) =
+  ## Top the cache back up to 32 bits, a byte at a time. `sh` reaching zero or
+  ## above is what says a whole byte of room has opened up.
   while reader.sh >= 0:
     reader.cache = reader.cache or
       (uint32(uint8(reader.data[reader.next])) shl reader.sh)
@@ -374,12 +464,25 @@ proc refill(reader: var HuffReader) =
     reader.sh -= 8
 
 func position(reader: HuffReader): int = reader.next * 8 - 24 + reader.sh
+  ## Where the cache has really consumed up to, in bits from the start of the
+  ## buffer. The 24 subtracts the bits still sitting unconsumed in the cache, so
+  ## the plain bit reader can be resumed from here after the Huffman pass.
 
 func negative(reader: HuffReader): bool =
+  ## The next bit, as a sign. The Huffman tables code magnitudes, with each
+  ## non-zero value's sign following as one bit.
   (reader.cache and 0x8000_0000'u32) != 0
 
 proc decodeSpectrum(dst: var seq[float32]; dstBase: int; bits: var Bits;
                     gr: GranuleInfo; scf: array[40, float32]; limit: int) =
+  ## The 576 spectral lines of one granule: Huffman-decoded, dequantised through
+  ## the three-quarter-power curve, and scaled by their band's multiplier.
+  ##
+  ## Three regions each use their own table, then a "count1" tail codes the top
+  ## of the spectrum four lines at a time as nothing but signs, since up there the
+  ## values are only ever -1, 0 or 1. Lines past what the frame coded stay zero.
+  ## `limit` is where the frame's bits end: a frame that claims more lines than it
+  ## carries stops rather than reading into the next one.
   var reader = initHuff(bits)
   var one = 0.0'f32
   var region = 0
@@ -401,6 +504,10 @@ proc decodeSpectrum(dst: var seq[float32]; dstBase: int; bits: var Bits;
       one = scf[scfAt]
       inc scfAt
       while pairs > 0:
+        # A frame may declare more pairs than its own bits can hold. Stopping
+        # at the boundary keeps the refill inside the buffer instead of
+        # reading whatever follows it.
+        if reader.position() >= limit: return
         var width = 5
         var leaf = int(HuffTabs[bookBase + reader.peek(width)])
         while leaf < 0:
@@ -468,6 +575,9 @@ proc decodeSpectrum(dst: var seq[float32]; dstBase: int; bits: var Bits;
 # --- stereo -----------------------------------------------------------------
 
 proc midSideStereo(gr: var seq[float32]; base, count: int) =
+  ## Undo mid/side coding in place: the stored pair is sum and difference, and the
+  ## channels are their sum and difference back again. The 1/sqrt(2) the encoder
+  ## applied is folded into the scalefactor gain, so it does not appear here.
   for index in 0 ..< count:
     let a = gr[base + index]
     let b = gr[base + GranuleLines + index]
@@ -475,6 +585,9 @@ proc midSideStereo(gr: var seq[float32]; base, count: int) =
     gr[base + GranuleLines + index] = a - b
 
 proc intensityBand(gr: var seq[float32]; base, count: int; kl, kr: float32) =
+  ## Rebuild one intensity-coded band: above some frequency the encoder kept a
+  ## single spectrum plus a stereo position, and the two channels are that
+  ## spectrum scaled by the two weights the position implies.
   for index in 0 ..< count:
     gr[base + GranuleLines + index] = gr[base + index] * kr
     gr[base + index] = gr[base + index] * kl
@@ -498,6 +611,12 @@ proc topBand(gr: seq[float32]; base: int; sfb: seq[uint8]; bands: int;
 proc stereoProcess(gr: var seq[float32]; istPos: array[39, uint8];
                    sfb: seq[uint8]; h: FrameHeader; maxBand: array[3, int];
                    mpeg2Shift: int) =
+  ## Walk the bands, applying intensity coding above `maxBand` and mid/side
+  ## below it.
+  ##
+  ## The position-to-weight mapping differs between versions: MPEG-1 has eight
+  ## positions from a tangent table, MPEG-2 has 64 from a square-root one, and a
+  ## position at the top of either range means "leave this band to mid/side".
   let maxPos = if isMpeg1(h): 7 else: 64
   var base = 0
   var index = 0
@@ -523,6 +642,13 @@ proc stereoProcess(gr: var seq[float32]; istPos: array[39, uint8];
 
 proc intensityStereo(gr: var seq[float32]; istPos: var array[39, uint8];
                      info: seq[GranuleInfo]; first: int; h: FrameHeader) =
+  ## Find where each block's coded spectrum ends and hand the bands to
+  ## `stereoProcess`.
+  ##
+  ## Intensity coding starts at the first band the right channel left empty, so
+  ## the boundary is discovered from the data rather than transmitted. A
+  ## short-block granule has three interleaved blocks and therefore three
+  ## boundaries.
   var maxBand: array[3, int]
   let nSfb = info[first].nLongSfb + info[first].nShortSfb
   let blocks = if info[first].nShortSfb != 0: 3 else: 1
@@ -572,6 +698,11 @@ proc antialias(gr: var seq[float32]; base, bands: int) =
     at += 18
 
 proc dct3x9(y: var array[9, float32]) =
+  ## A nine-point DCT-III, in place, as three three-point transforms combined.
+  ##
+  ## The constants are cosines at multiples of pi/18 and pi/6; written out rather
+  ## than computed because this runs 32 times per granule. It is the inner step
+  ## of the 36-point inverse MDCT above it.
   var s0 = y[0]
   var s2 = y[2]
   var s4 = y[4]
@@ -616,6 +747,12 @@ proc dct3x9(y: var array[9, float32]) =
 
 proc imdct36(gr: var seq[float32]; grAt: int; overlap: var openArray[float32];
              overlapAt, window, bands: int) =
+  ## The long-block inverse MDCT: 18 lines per subband become 36 samples, of
+  ## which the first 18 overlap-add with what the previous granule left in
+  ## `overlap` and the second 18 are kept for the next.
+  ##
+  ## `window` selects one of four shapes — normal, start, short and stop — which
+  ## is how the format switches between block sizes without a discontinuity.
   var at = grAt
   var ovAt = overlapAt
   for _ in 0 ..< bands:
@@ -648,6 +785,8 @@ proc imdct36(gr: var seq[float32]; grAt: int; overlap: var openArray[float32];
     ovAt += 9
 
 func idct3(x0, x1, x2: float32): array[3, float32] =
+  ## A three-point inverse DCT. `0.86602540` is sqrt(3)/2, the only irrational
+  ## constant a three-point transform needs.
   let m1 = x1 * 0.86602540'f32
   let a1 = x0 - x2 * 0.5'f32
   [a1 + m1, x0 + x2, a1 - m1]
@@ -655,6 +794,9 @@ func idct3(x0, x1, x2: float32): array[3, float32] =
 proc imdct12(source: openArray[float32]; sourceAt: int;
              dst: var openArray[float32]; dstAt: int;
              overlap: var openArray[float32]; overlapAt: int) =
+  ## One 12-point inverse MDCT, the short-block counterpart of `imdct36`. Its
+  ## input lines are strided by 3 because a short-block granule interleaves its
+  ## three blocks rather than storing them one after another.
   var co = idct3(-source[sourceAt],
                  source[sourceAt + 6] + source[sourceAt + 3],
                  source[sourceAt + 12] + source[sourceAt + 9])
@@ -674,6 +816,9 @@ proc imdct12(source: openArray[float32]; sourceAt: int;
 
 proc imdctShort(gr: var seq[float32]; grAt: int;
                 overlap: var openArray[float32]; overlapAt, bands: int) =
+  ## The three short blocks of a subband, each through `imdct12`, overlapped with
+  ## each other and then with the previous granule. Short blocks exist to keep a
+  ## transient from smearing across 36 samples.
   var at = grAt
   var ovAt = overlapAt
   for _ in 0 ..< bands:
@@ -687,6 +832,10 @@ proc imdctShort(gr: var seq[float32]; grAt: int;
     ovAt += 9
 
 proc changeSign(gr: var seq[float32]; base: int) =
+  ## Flip the sign of every other line in every other subband.
+  ##
+  ## The polyphase synthesis filter below expects alternate subbands spectrally
+  ## reversed; doing it by sign here is what lets one filter serve all 32 bands.
   var at = base + 18
   var band = 0
   while band < SubBands:
@@ -700,6 +849,11 @@ proc changeSign(gr: var seq[float32]; base: int) =
 proc imdctGranule(gr: var seq[float32]; base: int;
                   overlap: var openArray[float32]; overlapAt: int;
                   blockType, longBands: int) =
+  ## The whole granule's inverse MDCT: `longBands` subbands as long blocks, the
+  ## rest as short ones, then the sign flip.
+  ##
+  ## A mixed-block granule is long at the bottom and short above, which is why
+  ## the split is a parameter rather than derived from `blockType` alone.
   var at = base
   var ovAt = overlapAt
   if longBands != 0:
@@ -715,6 +869,9 @@ proc imdctGranule(gr: var seq[float32]; base: int;
 # --- synthesis --------------------------------------------------------------
 
 proc dct2(gr: var seq[float32]; base, n: int) =
+  ## The 32-point DCT that begins polyphase synthesis, hand-unrolled in the
+  ## butterfly order the reference uses. It runs once per subband per granule,
+  ## which is what makes it worth unrolling.
   for k in 0 ..< n:
     var t: array[32, float32]
     var y = base + k
@@ -785,6 +942,12 @@ const PcmScale = 1.0'f32 / 32768.0'f32
 
 proc synthPair(pcm: var seq[float32]; at, stride: int;
                lins: openArray[float32]; z: int) =
+  ## Two output samples from the 15-tap synthesis window, whose coefficients are
+  ## the integers below.
+  ##
+  ## Written as integer weights on differences and sums of mirrored taps rather
+  ## than as a dot product with a float table: the window is symmetric, so each
+  ## pair of taps contributes once, and the whole of it stays in registers.
   var a = (lins[z + 14 * 64] - lins[z]) * 29'f32
   a += (lins[z + 64] + lins[z + 13 * 64]) * 213'f32
   a += (lins[z + 12 * 64] - lins[z + 2 * 64]) * 459'f32
@@ -875,6 +1038,12 @@ proc synth(gr: seq[float32]; grAt, channels: int; pcm: var seq[float32];
 proc synthGranule(decoder: var Decoder; gr: var seq[float32];
                   bands, channels: int; pcm: var seq[float32]; pcmAt: int;
                   lins: var seq[float32]) =
+  ## Subband samples to PCM: the DCT, then the polyphase filter over a 15-frame
+  ## history the decoder carries between frames.
+  ##
+  ## That history is why a stream cannot be decoded correctly from an arbitrary
+  ## frame — the first frames after a seek are missing the tail of the filter's
+  ## memory, which is the format's own behaviour and not a limitation here.
   for channel in 0 ..< channels:
     dct2(gr, GranuleLines * channel, bands)
   for index in 0 ..< 15 * 64: lins[index] = decoder.qmfState[index]
@@ -899,6 +1068,12 @@ proc decodeGranule(decoder: var Decoder; h: FrameHeader; main: var Bits;
                    gr: var seq[float32];
                    istPos: var array[2, array[39, uint8]];
                    scratch: var seq[float32]) =
+  ## One granule, all channels, from bits to subband samples: scalefactors,
+  ## spectrum, stereo undoing, alias reduction, inverse MDCT.
+  ##
+  ## Alias reduction undoes a deliberate leak between neighbouring subbands that
+  ## the encoder's filterbank introduces; skipped for short blocks, which do not
+  ## have it.
   var scf: array[40, float32]
   for channel in 0 ..< channels:
     let limit = main.pos + info[first + channel].part23Length
@@ -973,6 +1148,10 @@ proc gaplessTrim(data: string; frameStart, frameSize: int):
       at = index
       break
   if at < 0: return (0, 0, false)
+  # The scan above only guaranteed the four tag bytes; the flags field that
+  # follows them may be past the end of a truncated file.
+  if at + 8 > data.len:
+    raise newException(AudioError, "mp3: gapless tag stops mid-field")
   var flags = 0
   for index in 0 .. 3:
     flags = (flags shl 8) or int(uint8(data[at + 4 + index]))
@@ -1015,7 +1194,10 @@ func audioSpan(data: string): tuple[first, last: int] =
     var size = 0
     for index in countdown(3, 0):
       size = (size shl 8) or int(uint8(data[result.last - 20 + index]))
-    if size in 0 .. result.last - result.first: result.last -= size + 32
+    # `size + 32` is what gets removed, so that is what has to fit: taking the
+    # size alone as the bound lets the span end before it starts.
+    if size >= 0 and size + 32 <= result.last - result.first:
+      result.last -= size + 32
 
 proc readMp3*(data: string): AudioBuffer =
   ## Decode an MPEG audio file held in memory.
@@ -1133,7 +1315,13 @@ proc readMp3*(data: string): AudioBuffer =
   for index in 0 ..< count * channels:
     result.samples[index] = output[front * channels + index]
 
-proc readMp3File*(path: string): AudioBuffer =
-  readMp3(readFile(path))
+proc readMp3File*(path: string): AudioBuffer {.contractual.} =
+  ## `readMp3` over a file, read whole: a LAME or Xing tag in the first frame
+  ## records the encoder's padding, and the trailing part of it can only be
+  ## trimmed once the total frame count is known.
+  require:
+    path.len > 0
+  body:
+    readMp3(readFile(path))
 
 

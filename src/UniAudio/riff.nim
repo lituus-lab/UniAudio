@@ -30,10 +30,22 @@ type WaveFormat = object
   sampleRate: int
   bitsPerSample: int
 
+# RIFF is little-endian throughout, which is what `readUint16`/`readUint32`
+# already give on every platform this builds for. Widened to `int`/`int64` so a
+# size near 2^32 cannot come back negative and pass a `> 0` check.
 proc readU16(stream: Stream): int = int(stream.readUint16())
 proc readU32(stream: Stream): int64 = int64(stream.readUint32())
 
 proc parseFmt(stream: Stream; size: int): WaveFormat =
+  ## The `fmt ` chunk: encoding, channel count, rate and bit depth. `size` is
+  ## what the chunk header declared, and the whole of it is consumed either way,
+  ## so the caller lands on the next chunk header.
+  ##
+  ## Byte rate and block alignment are read and dropped: both are derivable from
+  ## the other fields, and a file that disagrees with itself about them is not
+  ## worth trusting over the fields that matter. Channel count and rate are
+  ## range-checked here rather than by the caller, because this is where a
+  ## hostile header first becomes a number.
   if size < 16:
     raise newException(AudioError, "wav: fmt chunk is too short")
   result.encoding = stream.readU16()
@@ -115,7 +127,17 @@ proc decodeSamples(raw: string; format: WaveFormat): seq[float32] =
       "wav: unsupported encoding: " & $format.encoding)
 
 proc readWave*(stream: Stream): AudioBuffer =
-  ## Decode a RIFF/WAVE stream. Raises `AudioError` on anything malformed.
+  ## Decode a RIFF/WAVE stream: integer PCM at 8, 16, 24 or 32 bits, IEEE float
+  ## at 32 or 64, and `WAVE_FORMAT_EXTENSIBLE` wrapping either.
+  ##
+  ## The whole stream is read, and the frame count comes from how many samples
+  ## the `data` chunk actually held — not from the size in its header, which an
+  ## arbitrary file controls. Chunks other than `fmt ` and `data` are skipped,
+  ## so a file carrying `LIST` or `fact` reads normally.
+  ##
+  ## Raises `AudioError` on anything malformed: a missing magic, a truncated
+  ## chunk, a depth that is not a whole number of bytes, an encoding this
+  ## library does not decode.
   if stream.readStr(4) != "RIFF":
     raise newException(AudioError, "wav: missing RIFF")
   discard stream.readU32() # declared file size, not trusted
@@ -164,6 +186,8 @@ proc readWave*(stream: Stream): AudioBuffer =
     result.samples[index] = samples[index]
 
 proc readWaveFile*(path: string): AudioBuffer {.contractual.} =
+  ## `readWave` over a file. A path that cannot be opened raises `IOError`,
+  ## which is what separates a missing file from a malformed one.
   require:
     path.len > 0
   body:
@@ -173,11 +197,14 @@ proc readWaveFile*(path: string): AudioBuffer {.contractual.} =
     defer: stream.close()
     readWave(stream)
 
+# Little-endian, byte by byte rather than through `stream.write(uint16)`, so the
+# bytes are the format's regardless of the host's own order.
 proc writeU16(stream: Stream; value: int) =
   stream.write(uint8(value and 0xFF))
   stream.write(uint8((value shr 8) and 0xFF))
 
 proc writeU32(stream: Stream; value: int) =
+  ## Four little-endian bytes: a chunk size, a rate, a byte rate.
   for shift in [0, 8, 16, 24]:
     stream.write(uint8((value shr shift) and 0xFF))
 
@@ -224,6 +251,9 @@ proc writeWave*(stream: Stream; buffer: AudioBuffer; bitsPerSample = 16)
 
 proc writeWaveFile*(path: string; buffer: AudioBuffer; bitsPerSample = 16)
     {.contractual.} =
+  ## `writeWave` to a file, 16 or 24 bits. A path that cannot be opened for
+  ## writing raises `IOError`; a depth this writer does not implement raises
+  ## `AudioError`.
   require:
     path.len > 0
   body:

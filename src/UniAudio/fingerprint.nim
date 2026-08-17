@@ -100,6 +100,10 @@ proc fingerprint*(buffer: AudioBuffer): Fingerprint {.contractual.} =
       offset += HopSize
 
 func popcount(value: uint32): int {.inline.} =
+  ## Set bits in a word, by Kernighan's method: `bits and (bits - 1)` clears the
+  ## lowest set bit, so the loop turns once per set bit rather than 32 times.
+  ## The Hamming distance between two fingerprint words is the popcount of their
+  ## xor, which is what every comparison here reduces to.
   var bits = value
   while bits != 0:
     inc result

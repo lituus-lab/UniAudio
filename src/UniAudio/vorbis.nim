@@ -18,6 +18,7 @@
 ## like an error. The fixtures come from `oggenc`, which emits floor type 1.
 
 import UniMath/native_float
+import contracts
 import ./pcm
 import ./fft
 import ./ogg
@@ -94,8 +95,14 @@ func ilog(value: int): int =
     rest = rest shr 1
 
 proc initReader(data: string): Reader = Reader(data: data, bit: 0)
+  ## A reader over one Ogg packet. Vorbis packs its fields least significant bit
+  ## first — the opposite of FLAC and ALAC — which is why this reader is its own
+  ## rather than shared.
 
 proc read(reader: var Reader; count: int): uint32 =
+  ## The next `count` bits, least significant first, `count` at most 32. Running
+  ## off the end raises `AudioError`: a truncated packet is a malformed file, not
+  ## a stream of zeros.
   if count == 0: return 0
   if reader.bit + count > reader.data.len * 8:
     raise newException(AudioError, "vorbis: packet ended early")
@@ -176,6 +183,12 @@ proc buildTrie(book: var Codebook; lengths: seq[uint8]) =
       available[level] = code + (1'u32 shl (32 - level))
 
 proc decodeSymbol(reader: var Reader; book: Codebook): int =
+  ## One entry, walked bit by bit down the codebook's trie.
+  ##
+  ## A trie rather than a table: Vorbis codeword lengths reach 32 bits, so a flat
+  ## lookup would need four gigabytes of entries. The walk is bounded by
+  ## `MaxCodeLength`, so a codebook whose tree is malformed raises instead of
+  ## looping.
   var node = 0
   for _ in 0 .. MaxCodeLength:
     if book.leaf[node] >= 0: return int(book.leaf[node])
@@ -186,6 +199,13 @@ proc decodeSymbol(reader: var Reader; book: Codebook): int =
   raise newException(AudioError, "vorbis: codeword runs past any legal length")
 
 proc readCodebook(reader: var Reader): Codebook =
+  ## One codebook from the setup header: its shape, its codeword lengths, and the
+  ## vector-quantisation table when it has one.
+  ##
+  ## Vorbis carries no fixed tables — every stream brings its own — so this runs
+  ## once per codebook at open time and its output is what the audio packets are
+  ## read against. The lengths arrive either one per entry or run-length coded,
+  ## and both forms end as the same flattened trie.
   if reader.read(24) != 0x564342'u32:
     raise newException(AudioError, "vorbis: codebook lacks its sync pattern")
   result.dimensions = int(reader.read(16))
@@ -256,6 +276,13 @@ proc readCodebook(reader: var Reader): Codebook =
       if result.lookupType == 1: divisor *= lookupValues
 
 proc readFloor(reader: var Reader; codebookCount: int): Floor1 =
+  ## A floor configuration: the coarse spectral envelope's shape, as the list of
+  ## x positions whose y values each packet codes.
+  ##
+  ## The x list arrives in partition order and is sorted here, with each point's
+  ## two nearest already-placed neighbours precomputed — the packet decoder
+  ## interpolates between exactly those, so finding them once at open time saves
+  ## a search per point per packet.
   let kind = int(reader.read(16))
   if kind == 0:
     raise newException(AudioError, "vorbis: floor type 0 is not decoded")
@@ -329,6 +356,12 @@ proc readFloor(reader: var Reader; codebookCount: int): Floor1 =
         high = x
 
 proc readResidue(reader: var Reader; books: seq[Codebook]): Residue =
+  ## A residue configuration: which codebooks carry the fine spectral structure,
+  ## and how a vector is split across passes.
+  ##
+  ## Types 0, 1 and 2 differ only in how they interleave — 2 flattens every
+  ## channel into one vector before splitting, 0 and 1 work per channel — so one
+  ## configuration shape serves all three and the type is read at decode time.
   result.kind = int(reader.read(16))
   if result.kind > 2:
     raise newException(AudioError,
@@ -365,6 +398,8 @@ proc readResidue(reader: var Reader; books: seq[Codebook]): Residue =
   # One classification word covers several partitions, as digits in base
   # `classifications`; unpacking them once here keeps a divide out of the
   # decode loop.
+  if books[result.classbook].dimensions <= 0:
+    raise newException(AudioError, "vorbis: residue classbook has no shape")
   let words = books[result.classbook].dimensions
   result.classData = newSeq[seq[uint8]](books[result.classbook].entries)
   for entry in 0 ..< result.classData.len:
@@ -376,6 +411,12 @@ proc readResidue(reader: var Reader; books: seq[Codebook]): Residue =
 
 proc readMapping(reader: var Reader;
                  channels, floorCount, residueCount: int): Mapping =
+  ## Which floor and residue each channel uses, and which channel pairs are
+  ## coupled.
+  ##
+  ## Coupling stores a pair as magnitude and angle rather than as two channels,
+  ## so the pairs have to be known before the residue can be undone. The pair
+  ## list is read here and applied per packet.
   if reader.read(16) != 0:
     raise newException(AudioError, "vorbis: unknown mapping type")
   result.chan = newSeq[MappingChannel](channels)
@@ -434,6 +475,13 @@ func oggCodecName(packet: string): string =
   else: ""
 
 proc readHeaders(packets: seq[OggPacket]): VorbisSetup =
+  ## The three mandatory headers — identification, comment, setup — into one
+  ## configuration the audio packets are decoded against.
+  ##
+  ## Their order and their type bytes (1, 3, 5) are fixed by the specification,
+  ## so both are checked: a stream whose headers are shuffled is malformed rather
+  ## than something to guess at. The comment header is skipped here; `tags`
+  ## reads it separately.
   if packets.len < 3:
     raise newException(AudioError, "vorbis: the three headers are not all there")
   for index, expected in [1'u8, 3'u8, 5'u8]:
@@ -522,6 +570,11 @@ const inverseDb = block:
   table
 
 func predictPoint(x, x0, x1, y0, y1: int): int =
+  ## Where the line from (x0, y0) to (x1, y1) sits at `x`, in integers.
+  ##
+  ## The sign is handled by branching rather than by dividing a negative `dy`:
+  ## integer division truncates towards zero, so `(dy * dx) div run` would round
+  ## the two directions differently and the floor would not match the encoder's.
   let dy = y1 - y0
   let offset = (abs(dy) * (x - x0)) div (x1 - x0)
   if dy < 0: y0 - offset else: y0 + offset
@@ -555,6 +608,11 @@ proc drawLine(target: var seq[float32]; x0, y0, x1, y1, limit: int) =
 
 proc applyFloor(floor: Floor1; finalY: seq[int]; target: var seq[float32];
                 half: int) =
+  ## Multiply the residue by the floor, in place.
+  ##
+  ## The floor is drawn between its points as integer steps and each step indexes
+  ## `inverseDb`, so the envelope is applied as a table lookup rather than as an
+  ## exponential per bin. Beyond the last point the final value is held flat.
   var lowX = 0
   var lowY = finalY[0] * floor.multiplier
   for order in 1 ..< floor.xList.len:
@@ -669,6 +727,10 @@ proc decodeResidue(reader: var Reader; setup: VorbisSetup; residue: Residue;
           if book >= 0:
             var remaining = residue.partSize
             let vectorBook = setup.codebooks[book]
+            # Each turn of the loop below consumes `dimensions` values, so a
+            # book without any would spin without ever finishing.
+            if vectorBook.dimensions <= 0:
+              raise newException(AudioError, "vorbis: residue book has no shape")
             while remaining > 0:
               let entry = decodeSymbol(reader, vectorBook)
               let base = entry * vectorBook.dimensions
@@ -906,7 +968,13 @@ proc readVorbis*(data: string): AudioBuffer =
       result.samples[index * setup.channels + channel] =
         clamp(output[channel][index], -1.0'f32, 1.0'f32)
 
-proc readVorbisFile*(path: string): AudioBuffer =
-  readVorbis(readFile(path))
+proc readVorbisFile*(path: string): AudioBuffer {.contractual.} =
+  ## `readVorbis` over a file, read whole: Ogg pages have to be walked to find
+  ## the packet boundaries, and the last page's granule position is what gives
+  ## the true sample count.
+  require:
+    path.len > 0
+  body:
+    readVorbis(readFile(path))
 
 

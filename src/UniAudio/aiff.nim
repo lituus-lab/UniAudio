@@ -16,16 +16,16 @@ import UniMath/native_float
 import contracts
 import ./pcm
 
-const MaxChunkBytes* = 512 * 1024 * 1024
-  ## Same ceiling as RIFF: a chunk larger than this is refused rather than
-  ## allocated.
-
+# AIFF is big-endian, the opposite of RIFF, which is the only structural
+# difference between the two for uncompressed audio. Read a byte at a time so
+# the result does not depend on the host's own order.
 proc readU16be(stream: Stream): int =
   let high = int(uint8(stream.readChar()))
   let low = int(uint8(stream.readChar()))
   (high shl 8) or low
 
 proc readU32be(stream: Stream): int64 =
+  ## Four big-endian bytes, widened to `int64` so a size near 2^32 stays positive.
   result = 0
   for _ in 0 .. 3:
     result = (result shl 8) or int64(uint8(stream.readChar()))
@@ -43,10 +43,23 @@ proc readExtended80(stream: Stream): float =
   if exponent == 0 and mantissa == 0: return 0.0
   if exponent == 0x7FFF:
     raise newException(AudioError, "aiff: sample rate is infinity or NaN")
-  sign * float(mantissa) * pow(2.0, float(exponent - 16383 - 63))
+  let value = sign * float(mantissa) * pow(2.0, float(exponent - 16383 - 63))
+  # The caller turns this into an `int`, and a conversion from a float past
+  # what an int holds is undefined rather than merely wrong. A rate outside
+  # the range any recording uses is refused here, where it is still a float.
+  if value < 0.0 or value > float(MaxSampleRate):
+    raise newException(AudioError, "aiff: sample rate out of range")
+  value
 
 proc decodeSamples(raw: string; bits: int;
                    littleEndian, isFloat: bool): seq[float32] =
+  ## One float per stored sample, in file order, so the caller receives the
+  ## interleaving the file has rather than a layout invented here.
+  ##
+  ## `littleEndian` is true for the `sowt` compression type, which is ordinary
+  ## PCM with the bytes reversed — AIFF-C's way of storing what a WAV stores.
+  ## `isFloat` selects `fl32`. Neither is derivable from `bits`, so both are
+  ## passed in from the compression type the file declared.
   let bytesPerSample = bits div 8
   let count = raw.len div bytesPerSample
   result = newSeq[float32](count)
@@ -179,6 +192,8 @@ proc readAiff*(stream: Stream): AudioBuffer =
     result.samples[index] = samples[index]
 
 proc readAiffFile*(path: string): AudioBuffer {.contractual.} =
+  ## `readAiff` over a file. A path that cannot be opened raises `IOError`,
+  ## which is what separates a missing file from a malformed one.
   require:
     path.len > 0
   body:

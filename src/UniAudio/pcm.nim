@@ -30,18 +30,34 @@ type
     ## does not implement.
 
 const
+  MaxChunkBytes* = 512 * 1024 * 1024
+    ## Largest chunk any reader here will allocate for. A header claiming more
+    ## is refused rather than believed. Shared so RIFF and AIFF cannot drift
+    ## apart, and so a caller naming it gets one constant rather than an
+    ## ambiguity between two.
   MaxSampleRate* = 768_000
     ## Past any real recording; a header claiming more is malformed.
   MaxChannels* = 64
+    ## More than any format here codes. A header claiming more is malformed.
 
 func isValid*(format: AudioFormat): bool =
+  ## Whether the three numbers describe a buffer that can exist: a rate and a
+  ## channel count inside this library's ceilings, and a frame count that is not
+  ## negative. Zero frames is valid — an empty file decodes to an empty buffer.
+  ## Every proc taking an `AudioBuffer` requires this, so a caller building a
+  ## format by hand should check it first.
   format.sampleRate in 1 .. MaxSampleRate and
     format.channels in 1 .. MaxChannels and format.frames >= 0
 
 func sampleCount*(format: AudioFormat): int =
+  ## How many values a buffer of this shape holds — `frames * channels`, not
+  ## `frames`. Confusing the two halves or doubles a duration, which is why the
+  ## count has a name of its own.
   format.frames * format.channels
 
 func durationSeconds*(format: AudioFormat): float {.contractual.} =
+  ## Playing time in seconds, from the frame count and the rate. Frames count
+  ## per channel, so the channel count does not enter it.
   require:
     format.isValid
   body:
@@ -62,6 +78,9 @@ proc initAudioBuffer*(sampleRate, channels, frames: int): AudioBuffer
     result.samples = newSeq[float32](frames * channels)
 
 func sampleAt*(buffer: AudioBuffer; frame, channel: int): float32 {.inline.} =
+  ## One sample, addressed by frame and channel rather than by its index in the
+  ## interleaved sequence. Bounds are Nim's: an out-of-range frame or channel
+  ## raises `IndexDefect` rather than reading a neighbouring channel.
   buffer.samples[frame * buffer.format.channels + channel]
 
 proc toMono*(buffer: AudioBuffer): AudioBuffer {.contractual.} =
@@ -133,6 +152,9 @@ func fromPcm24*(low, mid, high: uint8): float32 {.inline.} =
   float32(raw) / 8_388_608.0'f32
 
 func fromPcm32*(value: int32): float32 {.inline.} =
+  ## Divided by 2^31, the same asymmetry as the narrower widths. The division
+  ## happens at float64 and only then narrows: at float32 the divisor and most
+  ## inputs share an exponent range where the quotient would lose low bits.
   float32(float64(value) / 2_147_483_648.0)
 
 

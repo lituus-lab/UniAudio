@@ -29,11 +29,24 @@ type Container* = enum
   acIsoBmff = "mp4"
 
 func startsWithAt(data: string; offset: int; text: string): bool =
+  ## Whether `text` sits at `offset`. False rather than a raise when the string
+  ## is too short: every caller here is testing a magic number against bytes of
+  ## unknown length, where "not long enough" and "does not match" are the same
+  ## answer.
   offset >= 0 and offset + text.len <= data.len and
     data[offset ..< offset + text.len] == text
 
 func sniff*(data: string): Container =
-  ## Identify a container from its leading bytes.
+  ## Identify a container from its leading bytes, without decoding it.
+  ##
+  ## Never from a file extension: a `.wav` holding a FLAC stream is a real
+  ## thing. `acUnknown` for anything unrecognised, including a string shorter
+  ## than four bytes.
+  ##
+  ## MP4 is the one magic that is not at offset zero — `ftyp` follows a
+  ## four-byte box length. MP3 is last because its sync word is only eleven set
+  ## bits, which any format could hold by chance; every stricter magic gets to
+  ## answer first.
   if data.len < 4: return acUnknown
   if data.startsWithAt(0, "RIFF") and data.startsWithAt(8, "WAVE"):
     return acWave
@@ -56,7 +69,12 @@ func decodes*(container: Container): bool =
   container != acUnknown
 
 proc decode*(data: string): AudioBuffer =
-  ## Decode whatever the bytes turn out to be.
+  ## Decode whatever the bytes turn out to be, to interleaved float32 samples.
+  ##
+  ## `sniff` names the container and this dispatches on it. A container that is
+  ## recognised but holds a codec this build does not decode raises `AudioError`
+  ## from the codec's own reader, with that codec named — so the caller learns
+  ## what the file is, not merely that it failed.
   let container = sniff(data)
   case container
   of acWave: readWave(newStringStream(data))
@@ -69,6 +87,12 @@ proc decode*(data: string): AudioBuffer =
     raise newException(AudioError, "unrecognised audio container")
 
 proc decodeFile*(path: string): AudioBuffer {.contractual.} =
+  ## `decode` over a file, read whole.
+  ##
+  ## Read whole rather than streamed: FLAC and MP4 both need tables that sit
+  ## after the audio, so neither can be decoded from a forward-only stream. A
+  ## path that cannot be opened raises `IOError`, which is what separates a
+  ## missing file from a malformed one.
   require:
     path.len > 0
   body:
