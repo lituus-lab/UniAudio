@@ -2,7 +2,7 @@
 # Copyright 2026 lituus-lab
 ## AIFF and AIFF-C, built byte by byte so the decoder is checked against a
 ## file this test wrote rather than against itself.
-import std/[unittest, math, streams]
+import std/[unittest, streams]
 import UniAudio
 
 proc beU16(value: int): string =

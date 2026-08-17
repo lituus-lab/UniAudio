@@ -6,7 +6,7 @@
 ## level 0 (fixed predictors) and level 8 (high-order LPC). FLAC is lossless,
 ## so decoding the FLAC must reproduce the WAV: the only difference allowed is
 ## the integer-to-float scale, one step apart between the two readers.
-import std/[unittest, os, math, strutils]
+import std/[unittest, os, strutils]
 import UniAudio
 
 const Fixtures = currentSourcePath.parentDir / "fixtures"
