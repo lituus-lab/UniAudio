@@ -154,3 +154,5 @@ proc oggPackets*(data: string): seq[OggPacket] =
   if streams.len == 0:
     raise newException(AudioError, "ogg: file holds no complete packet")
   streams[0].packets
+
+

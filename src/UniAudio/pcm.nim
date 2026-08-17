@@ -134,3 +134,5 @@ func fromPcm24*(low, mid, high: uint8): float32 {.inline.} =
 
 func fromPcm32*(value: int32): float32 {.inline.} =
   float32(float64(value) / 2_147_483_648.0)
+
+

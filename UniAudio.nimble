@@ -163,10 +163,15 @@ task coverage, "LCOV + HTML coverage report for the Nim sources (needs lcov)":
   let cache = "build/covcache"
   rmDir cache
   rmDir "coverage"
-  exec "nim c --path:src --nimcache:" & cache &
-       " --debugger:native --passC:--coverage --passL:--coverage" &
-       " -o:build/test_coverage tests/test_pcm.nim"
-  exec "./build/test_coverage"
+  # Every suite, into one cache so the gcov counters accumulate: a report drawn
+  # from a single test file would describe two modules and be labelled as the
+  # library.
+  for suite in ["pcm", "aiff", "flac", "alac", "ogg", "vorbis", "mp3", "tags",
+                "fingerprint"]:
+    exec "nim c --path:src --nimcache:" & cache &
+         " --debugger:native --passC:--coverage --passL:--coverage" &
+         " -o:build/cov_" & suite & " tests/test_" & suite & ".nim"
+    exec "./build/cov_" & suite
   exec "lcov --capture --directory " & cache & " --base-directory ." &
        " --include \"*/src/UniAudio/*\" --output-file lcov.info --quiet"
   exec "genhtml lcov.info --output-directory coverage --legend --quiet"

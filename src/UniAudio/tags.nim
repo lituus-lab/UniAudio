@@ -375,3 +375,5 @@ proc readTags*(data: string): Tags =
 
 proc readTagsFile*(path: string): Tags =
   readTags(readFile(path))
+
+

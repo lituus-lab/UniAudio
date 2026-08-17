@@ -89,3 +89,5 @@ proc sniffFile*(path: string): Container {.contractual.} =
       raise newException(IOError, "cannot open " & path)
     defer: stream.close()
     sniff(stream.readStr(16))
+
+

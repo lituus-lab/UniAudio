@@ -230,3 +230,5 @@ proc uaud_wave_probe(path: cstring; sampleRate, channels: ptr cint;
   except CatchableError, Defect:
     lastError = getCurrentExceptionMsg()
     cint(uaudErrFormat)
+
+

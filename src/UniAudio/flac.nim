@@ -380,3 +380,5 @@ proc readFlacFile*(path: string): AudioBuffer {.contractual.} =
       raise newException(IOError, "flac: cannot open " & path)
     defer: stream.close()
     readFlac(stream.readAll())
+
+

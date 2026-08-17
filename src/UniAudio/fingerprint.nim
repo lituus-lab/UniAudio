@@ -141,3 +141,5 @@ proc offsetSimilarity*(a, b: Fingerprint;
       if shift < b.words.len:
         result = max(result,
           similarity(a, Fingerprint(words: b.words[shift .. ^1])))
+
+
