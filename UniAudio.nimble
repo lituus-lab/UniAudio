@@ -93,6 +93,10 @@ task testAll, "debug + release + C ABI":
 task bench, "Decode and fingerprint benchmarks (release; not in the default gate)":
   exec "nim c -r -d:release --path:src -o:build/bench_decode bench/bench_decode.nim"
 
+task benchReadme, "Run the benchmarks and splice their output into bench/README.md":
+  exec "nimble bench"
+  exec "nim c -r -d:release --hints:off -o:build/bench_export bench/export_readme.nim"
+
 task example, "Nim demo":
   exec "nim c -r --path:src -o:build/demo examples/demo.nim"
 

@@ -33,6 +33,7 @@ type Row = object
   nsPerFrame, realtime: float
 
 var rows: seq[Row]
+var tagMicroseconds: float
 
 template measure(label: string; rounds, frames, rate: int; body: untyped) =
   # One untimed round first, so the file cache is warm for every format alike.
@@ -83,16 +84,28 @@ proc main() =
     let start = cpuTime()
     for _ in 1 .. rounds:
       keep(uint64(readTagsFile(Fixtures / "tagged.flac").title.len))
-    let each = (cpuTime() - start) * 1_000_000 / float(rounds)
+    tagMicroseconds = (cpuTime() - start) * 1_000_000 / float(rounds)
     echo alignLeft("tags (flac)", 26), " | ",
-      align(formatFloat(each, ffDecimal, 1), 9), " us/file"
+      align(formatFloat(tagMicroseconds, ffDecimal, 1), 9), " us/file"
 
   echo repeat('-', 72)
+  # Bracketed for bench/export_readme.nim, which splices it into the README
+  # rather than anyone retyping it.
+  echo "<!-- table -->"
+  echo "Input: ", frames, " frames at ", rate, " Hz, ",
+    reference.format.channels, " channel, ",
+    formatFloat(reference.format.durationSeconds, ffDecimal, 2), " s."
+  echo ""
   echo "| operation | ns/frame | realtime |"
   echo "| --- | ---: | ---: |"
   for row in rows:
     echo "| ", row.name, " | ", formatFloat(row.nsPerFrame, ffDecimal, 1),
       " | ", $int(round(row.realtime)), "x |"
+
+  echo ""
+  echo "Tags, read from headers and never touching the audio: ",
+    formatFloat(tagMicroseconds, ffDecimal, 1), " us per file."
+  echo "<!-- /table -->"
 
   echo "sink = ", sink        # keeps every decode live across the suite
 
