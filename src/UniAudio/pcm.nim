@@ -27,7 +27,7 @@ type
 
   AudioError* = object of CatchableError
     ## A container this library cannot read, a truncated file, or a codec it
-    ## deliberately does not implement.
+    ## does not implement.
 
 const
   MaxSampleRate* = 768_000

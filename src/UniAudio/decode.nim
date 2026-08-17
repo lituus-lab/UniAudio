@@ -5,7 +5,7 @@
 ## The container is identified from the bytes, never from the extension — a
 ## `.wav` holding a FLAC stream is a real thing, and a caller should not have
 ## to guess. What this build does not decode is named in the error rather than
-## reported as a generic failure: knowing a file is MP3 and unsupported is
+## reported as a generic failure: the codec a file turned out to hold is
 ## actionable, "unsupported file" is not.
 
 import std/streams
@@ -50,10 +50,9 @@ func sniff*(data: string): Container =
   acUnknown
 
 func decodes*(container: Container): bool =
-  ## Whether this build reads that container. MP4 and Ogg answer yes because
-  ## the container itself is read, but either can carry a codec this library
-  ## will not decode — AAC, Opus. Only opening it settles that, and the error
-  ## then names the codec found.
+  ## Whether this build reads that container. MP4 and Ogg answer yes because the
+  ## container itself is read; which codec sits inside is settled by opening it,
+  ## and the error then names the codec found.
   container != acUnknown
 
 proc decode*(data: string): AudioBuffer =

@@ -2,10 +2,8 @@
 # Copyright 2026 lituus-lab
 ## UniAudio — umbrella module. Re-exports every public submodule.
 ##
-## Audio containers, tags and decoders for formats that carry no active patent,
-## plus the acoustic fingerprint built on them. Codecs under licence — AAC, and
-## anything a video container brings — are deliberately absent: see the codec
-## amendment in the family structure document.
+## Audio containers, tags and decoders, plus the acoustic fingerprint built on
+## them. A file this library cannot decode is reported with the codec named.
 import UniAudio/pcm
 import UniAudio/riff
 import UniAudio/aiff

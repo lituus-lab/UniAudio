@@ -5,9 +5,6 @@
 ## Ported from minimp3 (CC0 1.0, lieff), named in NOTICE. Its tables are in
 ## `mp3_tables`.
 ##
-## The last MP3 patents expired in 2017, which is what puts the format inside
-## this library rather than behind a backend the application supplies.
-##
 ## A frame carries two granules of 576 spectral lines per channel, Huffman
 ## coded against a scalefactor envelope. Decoding runs the encoder backwards:
 ## read the scalefactors, read the spectrum, undo the stereo folding, undo the

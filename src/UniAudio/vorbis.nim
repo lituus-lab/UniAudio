@@ -13,9 +13,9 @@
 ## the floor — times a fine structure — the residue. Multiplying them, running
 ## an inverse MDCT and overlapping with the previous packet gives samples.
 ##
-## Floor type 0 is refused rather than approximated. It is the line-spectral
-## representation no encoder has emitted since 2004, and decoding it wrongly
-## would sound like audio rather than like an error.
+## Floor type 0 — the line-spectral representation — is refused rather than
+## approximated, because decoding it wrongly would sound like audio rather than
+## like an error. The fixtures come from `oggenc`, which emits floor type 1.
 
 import UniMath/native_float
 import ./pcm
@@ -258,8 +258,7 @@ proc readCodebook(reader: var Reader): Codebook =
 proc readFloor(reader: var Reader; codebookCount: int): Floor1 =
   let kind = int(reader.read(16))
   if kind == 0:
-    raise newException(AudioError, "vorbis: floor type 0 is not decoded; " &
-      "no encoder has produced it since 2004")
+    raise newException(AudioError, "vorbis: floor type 0 is not decoded")
   if kind != 1:
     raise newException(AudioError, "vorbis: unknown floor type " & $kind)
 

@@ -80,7 +80,7 @@ suite "alac magic cookie":
     expect AudioError:
       discard parseMagicCookie(cookie)
 
-suite "mp4 containers this build will not decode":
+suite "mp4 containers this build does not decode":
   test "a track that is not ALAC names the codec it found":
     # The same file with its sample entry renamed: the error must say `mp4a`
     # rather than report a generic failure.
