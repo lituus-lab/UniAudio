@@ -6,15 +6,16 @@
 ## not against itself. The fingerprint is checked against the property it
 ## exists for: the same recording, louder or re-encoded, must fingerprint the
 ## same; a different recording must not.
-import std/[unittest, os, math]
+import std/[unittest, os]
+import UniMath/native_float
 import UniAudio
 
 const Fixtures = currentSourcePath.parentDir / "fixtures"
 
-proc directDft(samples: seq[float64]): seq[Complex] =
+proc directDft(samples: seq[float64]): seq[Complex[float64]] =
   ## The definition, O(n^2), used only to check the fast version.
   let n = samples.len
-  result = newSeq[Complex](n)
+  result = newSeq[Complex[float64]](n)
   for k in 0 ..< n:
     var re = 0.0
     var im = 0.0
@@ -22,7 +23,7 @@ proc directDft(samples: seq[float64]): seq[Complex] =
       let angle = -2.0 * PI * float(k) * float(t) / float(n)
       re += samples[t] * cos(angle)
       im += samples[t] * sin(angle)
-    result[k] = Complex(re: re, im: im)
+    result[k] = complex(re, im)
 
 proc tone(rate, frames: int; hz, amplitude: float): AudioBuffer =
   result = initAudioBuffer(rate, 1, frames)
@@ -36,9 +37,9 @@ suite "fft":
     for index in 0 ..< 16:
       samples[index] = sin(float(index) * 0.7) + 0.3 * cos(float(index) * 2.1)
     let reference = directDft(samples)
-    var values = newSeq[Complex](16)
+    var values = newSeq[Complex[float64]](16)
     for index in 0 ..< 16:
-      values[index] = Complex(re: samples[index], im: 0.0)
+      values[index] = complex(samples[index])
     fft(values)
     for index in 0 ..< 16:
       check abs(values[index].re - reference[index].re) < 1e-9
