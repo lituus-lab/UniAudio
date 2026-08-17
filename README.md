@@ -19,7 +19,7 @@ codec — most of what a personal library holds is decodable freely.
 | WAV (RIFF) | yes | yes | Reads integer PCM at 8, 16, 24 and 32 bits and IEEE float at 32 and 64, including `WAVE_FORMAT_EXTENSIBLE`. Writes 16- or 24-bit integer PCM, clamping samples outside [-1, 1] rather than letting them wrap. |
 | AIFF, AIFF-C | yes | no | Uncompressed only — `NONE`, `twos`, `sowt`, `fl32`. Any other AIFF-C compression is refused, named. 8, 16, 24 and 32 bits. |
 | FLAC | yes | yes | Reads a native stream, 1 to 8 channels, 4 to 32 bits; FLAC inside Ogg is refused. Writes a native stream at 8, 16 or 24 bits with fixed predictors — the size `flac -0` gives, where `flac -8` is 1.2 to 1.6 times smaller because it fits an LPC model per frame. |
-| ALAC | yes | no | Inside MP4. Mono and stereo only; 16, 20, 24 or 32 bits. |
+| ALAC | yes | yes | Inside MP4. Mono and stereo only. Reads 16, 20, 24 or 32 bits; writes 16 or 24, with the reference encoder's own parameters — eight predictor taps, its mid/side weight search, and a raw frame wherever coding one would come to more. |
 | Vorbis | yes | no | Inside Ogg. Floor type 0 is refused rather than approximated — no encoder has produced it since 2004. Up to 16 channels. |
 | MP3 | yes | no | Layer III only; Layers I and II are refused, named. MPEG-1, 2 and 2.5. Encoder padding is trimmed when a LAME or Xing tag records it, and left alone when nothing does. |
 | Opus | no | no | Not implemented. No licence stands in the way. An Ogg holding it is refused with the codec named. |
@@ -42,9 +42,11 @@ though it were broken Vorbis.
 - **Sample buffers** — `src/UniAudio/pcm.nim`. One interleaved float32 shape
   every decoder produces, plus channel mixing and rate conversion.
 - **Uncompressed containers** — `src/UniAudio/riff.nim`,
-  `src/UniAudio/aiff.nim`. WAV is the one format written as well as read.
+  `src/UniAudio/aiff.nim`. WAV is written as well as read; AIFF is read.
 - **Lossless codecs** — `src/UniAudio/flac.nim`, `src/UniAudio/alac.nim` over
-  `src/UniAudio/isobmff.nim`, which finds the coded frames inside an MP4.
+  `src/UniAudio/isobmff.nim`, which finds the coded frames inside an MP4 and
+  builds the MP4 the written ones travel in. Both codecs encode as well as
+  decode, over the shared bit writer in `src/UniAudio/bitio.nim`.
 - **Lossy codecs** — `src/UniAudio/vorbis.nim` over `src/UniAudio/ogg.nim`,
   and `src/UniAudio/mp3.nim` with its tables in
   `src/UniAudio/mp3_tables.nim`.
@@ -69,7 +71,8 @@ application decoding audio does not pull in a stack it has no use for.
 ## Provenance & development
 
 The codecs are ports, not original work, and each names its source in
-[NOTICE](NOTICE): ALAC from Apple's reference decoder (Apache 2.0), MP3 from
+[NOTICE](NOTICE): ALAC from Apple's reference implementation (Apache 2.0), both
+its decoder and its encoder; MP3 from
 minimp3 (CC0), Vorbis written against the Xiph specification with `stb_vorbis`
 consulted alongside it. FLAC, AIFF and RIFF are written from their published
 formats. The fingerprint is Haitsma and Kalker's, cited in the module that
@@ -86,11 +89,12 @@ being worked out at that speed from a blank page.
 ```
 src/UniAudio.nim              umbrella module
 src/UniAudio/pcm.nim          sample buffers, channel and rate conversion
+src/UniAudio/bitio.nim        writing bits, most significant first
 src/UniAudio/riff.nim         RIFF/WAVE read and write
 src/UniAudio/aiff.nim         AIFF and AIFF-C
-src/UniAudio/flac.nim         FLAC
-src/UniAudio/isobmff.nim      MP4 boxes: where the coded frames are
-src/UniAudio/alac.nim         Apple Lossless
+src/UniAudio/flac.nim         FLAC read and write
+src/UniAudio/isobmff.nim      MP4 boxes: reading them, and building one
+src/UniAudio/alac.nim         Apple Lossless read and write
 src/UniAudio/ogg.nim          Ogg pages into packets
 src/UniAudio/vorbis.nim       Vorbis I
 src/UniAudio/mp3.nim          MPEG-1/2 Layer III
@@ -125,7 +129,7 @@ nimble checkVGraph
 retyped by hand. That file also explains why the per-frame cost is the
 comparable figure and the realtime multiple is not.
 
-## How the decoders are checked
+## How the codecs are checked
 
 Never against themselves. Each fixture is a synthetic signal put through a
 reference encoder, and the decode is compared with what went in, or with what
@@ -141,8 +145,26 @@ an independent decoder makes of the same file:
 - The FFT against a transform written straight from its definition, and the
   inverse MDCT against the sum it is supposed to compute.
 
+The two encoders are checked the same way round — against a reference
+*decoder*, so a mistake shared between this library's own reader and writer
+cannot hide:
+
+- FLAC by `flac -t`, which decodes the stream and checks it against the MD5 in
+  the STREAMINFO the encoder wrote, covering the framing, both CRCs and every
+  sample in one command; and by `flac -d`, whose output is compared with the
+  samples that went in.
+- ALAC by decoding the written file with ffmpeg and comparing its checksum of
+  the samples with ffmpeg's checksum of the original WAV — so the MP4 tables,
+  the frame headers, the mid/side weights and the samples are all covered by
+  an implementation sharing nothing with this one.
+
+Each needs its tool installed. Where `flac` or `ffmpeg` is missing, the round
+trip through this library's own reader still runs and the reference check does
+not — so a machine without them tests less, and says so in the suite that
+exists for nothing else.
+
 `nimble coverage` merges a run of every suite and reports coverage per module.
-No module sits below 73% of its lines; the whole library is a little under 89%.
+No module sits below 73% of its lines; the whole library is a little under 90%.
 The figure is not pinned here to a decimal place, because one would go stale on
 the next edit and stop being a measurement.
 

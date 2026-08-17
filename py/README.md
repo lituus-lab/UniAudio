@@ -30,8 +30,8 @@ len(samples) == frames * channels      # True
 ```
 
 `decode_resampled(path, target_rate, to_mono)` mixes and resamples in the same
-pass, and `write_wave` is the one way out — WAV is the only format this library
-writes.
+pass. Three ways out: `write_wave` for uncompressed PCM, `write_flac` and
+`write_alac` for the same samples losslessly compressed.
 
 `probe` returns `(sample_rate, channels, frames)`, where `frames` counts per
 channel. WAV, AIFF, FLAC, ALAC in MP4, Vorbis in Ogg and MP3 all decode; a

@@ -1,12 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 lituus-lab
-## FLAC, decoded.
+## FLAC, read and written.
 ##
 ## Lossless and royalty-free, which is why it is here: the reference
 ## implementation is BSD, the format is fully specified, and nothing in it is
 ## encumbered. What a decoder must do is small enough to state — read a frame
 ## header, reconstruct each channel from a predictor plus Rice-coded
-## residuals, then undo the stereo decorrelation.
+## residuals, then undo the stereo decorrelation. The encoder is the same steps
+## in reverse, with the fixed predictors only: it reaches the size `flac -0`
+## gives, not the size its LPC search does.
 ##
 ## Everything a frame declares is checked against what the stream actually
 ## carries: block size, channel count and bit depth all come from a header a
