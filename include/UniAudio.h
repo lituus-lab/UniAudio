@@ -72,9 +72,8 @@ int uaud_decode_resampled(const char *path, int target_rate, int to_mono,
                           int *sample_rate, int *channels, long long *frames,
                           float **samples);
 
-/* Write interleaved floats as a RIFF/WAVE file: the only format this library
- * writes. bits_per_sample is 16 or 24; samples outside [-1, 1] are clamped
- * rather than left to wrap. */
+/* Write interleaved floats as a RIFF/WAVE file. bits_per_sample is 16 or 24;
+ * samples outside [-1, 1] are clamped rather than left to wrap. */
 int uaud_write_wave(const char *path, const float *samples, int sample_rate,
                     int channels, long long frames, int bits_per_sample);
 
@@ -84,6 +83,11 @@ int uaud_write_wave(const char *path, const float *samples, int sample_rate,
  * Fixed predictors, so the file is larger than the reference encoder's default
  * and decodes to exactly the same samples. */
 int uaud_write_flac(const char *path, const float *samples, int sample_rate,
+                    int channels, long long frames, int bits_per_sample);
+
+/* Encode interleaved floats to an .m4a holding one ALAC track, losslessly.
+ * bits_per_sample is 16 or 24; mono and stereo only. */
+int uaud_write_alac(const char *path, const float *samples, int sample_rate,
                     int channels, long long frames, int bits_per_sample);
 
 /* Release a buffer this library allocated. NULL is accepted. */

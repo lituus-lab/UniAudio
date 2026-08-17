@@ -10,7 +10,7 @@ import pytest
 
 from uniaudio import (UniAudioError, decode, decode_resampled, fingerprint,
                       offset_similarity, probe, similarity, sniff, tags,
-                      version, wave_probe, write_flac, write_wave)
+                      version, wave_probe, write_alac, write_flac, write_wave)
 
 FIXTURES = pathlib.Path(__file__).resolve().parents[2] / "tests" / "fixtures"
 
@@ -211,3 +211,30 @@ def test_a_written_flac_is_smaller_than_the_wav_it_came_from(tmp_path):
     path = tmp_path / "tone.flac"
     write_flac(path, samples, rate, channels, 16)
     assert path.stat().st_size < (FIXTURES / "tone16.wav").stat().st_size
+
+
+def test_a_written_alac_reads_back_exactly(tmp_path):
+    rate, channels, frames, samples = decode(FIXTURES / "stereo16.wav")
+    path = tmp_path / "out.m4a"
+    write_alac(path, samples, rate, channels, 16)
+    # An .m4a is sniffed as its container, not its codec: which codec it holds
+    # is what decoding it finds inside.
+    assert sniff(path) == "mp4"
+    back_rate, back_channels, back_frames, back = decode(path)
+    assert (back_rate, back_channels, back_frames) == (rate, channels, frames)
+    assert max(abs(a - b) for a, b in zip(samples, back)) < 1.0 / 30000.0
+
+
+def test_write_alac_refuses_what_it_does_not_implement(tmp_path):
+    rate, channels, frames, samples = decode(FIXTURES / "stereo16.wav")
+    for bits in (8, 20, 32):
+        with pytest.raises(UniAudioError):
+            write_alac(tmp_path / f"d{bits}.m4a", samples, rate, channels, bits)
+    # A channel count that does not divide the buffer is caught by the binding,
+    # before the ABI is ever entered — the ABI cannot see a length.
+    with pytest.raises(ValueError):
+        write_alac(tmp_path / "odd.m4a", samples, rate, 3, 16)
+    # One that does divide it reaches the ABI, which refuses more than two.
+    thirds = samples[: len(samples) // 3 * 3]
+    with pytest.raises(UniAudioError):
+        write_alac(tmp_path / "wide.m4a", thirds, rate, 3, 16)

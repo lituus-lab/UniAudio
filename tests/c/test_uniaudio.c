@@ -223,6 +223,45 @@ int main(void) {
   assert(uaud_write_wave(round, written, 8000, 2, RoundFrames, 32) == UAUD_ERR_ARG);
   assert(uaud_write_wave(round, written, 0, 2, RoundFrames, 16) == UAUD_ERR_ARG);
 
+  /* The two lossless encoders, through the same ABI: the samples must come
+   * back at the depth asked for and no further apart, and uaud_decode must
+   * find the format on its own rather than being told. */
+  {
+    char lossless[512];
+    const char *suffix[2] = {"uniaudio_capi_round.flac",
+                             "uniaudio_capi_round.m4a"};
+    for (int which = 0; which < 2; which++) {
+      snprintf(lossless, sizeof lossless, "%s%s", tmp ? tmp : "/tmp/",
+               suffix[which]);
+      const int status =
+          which == 0
+              ? uaud_write_flac(lossless, written, 8000, 2, RoundFrames, 16)
+              : uaud_write_alac(lossless, written, 8000, 2, RoundFrames, 16);
+      assert(status == UAUD_OK);
+
+      decoded = NULL;
+      assert(uaud_decode(lossless, &drate, &dchannels, &dframes, &decoded) ==
+             UAUD_OK);
+      assert(drate == 8000 && dchannels == 2 && dframes == RoundFrames);
+      for (int i = 0; i < RoundFrames * 2; i++) {
+        const float delta = decoded[i] - written[i];
+        assert(delta < 1.0f / 30000.0f && delta > -1.0f / 30000.0f);
+      }
+      uaud_free(decoded);
+      remove(lossless);
+    }
+  }
+
+  /* Out-of-range arguments are refused, not clamped. FLAC writes 8 bits and
+   * ALAC does not; neither writes 32, and ALAC writes no more than two
+   * channels. */
+  assert(uaud_write_flac(round, written, 8000, 2, RoundFrames, 32) == UAUD_ERR_ARG);
+  assert(uaud_write_flac(NULL, written, 8000, 2, RoundFrames, 16) == UAUD_ERR_ARG);
+  assert(uaud_write_alac(round, written, 8000, 2, RoundFrames, 8) == UAUD_ERR_ARG);
+  assert(uaud_write_alac(round, written, 8000, 2, RoundFrames, 32) == UAUD_ERR_ARG);
+  assert(uaud_write_alac(round, written, 8000, 3, RoundFrames, 16) == UAUD_ERR_ARG);
+  assert(uaud_write_alac(round, NULL, 8000, 2, RoundFrames, 16) == UAUD_ERR_ARG);
+
   /* A shifted copy of a fingerprint still matches, which a plain comparison
    * would miss. */
   {
