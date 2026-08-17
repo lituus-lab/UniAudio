@@ -2,17 +2,13 @@
 <!-- Copyright 2026 lituus-lab -->
 # UniAudio
 
-Audio containers, tags and decoders for formats carrying no active patent, plus
-an acoustic fingerprint built on them. Nim, with a C ABI and a Python binding
-like every other engine in the family.
+Audio containers, tags and decoders, plus an acoustic fingerprint built on
+them. Nim, with a C ABI and a Python binding like every other engine in the
+family.
 
 Give it a file and it gives you samples, whatever the file turned out to be.
 
-## Scope, and what is deliberately absent
-
-A media catalogue needs three things from an audio file: what it is, how long
-it is, and something it can be recognised by. None of that requires a licensed
-codec — most of what a personal library holds is decodable freely.
+## Codecs
 
 | Codec | Read | Write | Limitations |
 |---|:---:|:---:|---|
@@ -20,22 +16,13 @@ codec — most of what a personal library holds is decodable freely.
 | AIFF, AIFF-C | yes | no | Uncompressed only — `NONE`, `twos`, `sowt`, `fl32`. Any other AIFF-C compression is refused, named. 8, 16, 24 and 32 bits. |
 | FLAC | yes | yes | Reads a native stream, 1 to 8 channels, 4 to 32 bits; FLAC inside Ogg is refused. Writes a native stream at 8, 16 or 24 bits with fixed predictors — the size `flac -0` gives, where `flac -8` is 1.2 to 1.6 times smaller because it fits an LPC model per frame. |
 | ALAC | yes | yes | Inside MP4. Mono and stereo only. Reads 16, 20, 24 or 32 bits; writes 16 or 24, with the reference encoder's own parameters — eight predictor taps, its mid/side weight search, and a raw frame wherever coding one would come to more. |
-| Vorbis | yes | no | Inside Ogg. Floor type 0 is refused rather than approximated — no encoder has produced it since 2004. Up to 16 channels. |
+| Vorbis | yes | no | Inside Ogg. Floor type 1 only; type 0 is refused rather than approximated. Up to 16 channels. |
 | MP3 | yes | no | Layer III only; Layers I and II are refused, named. MPEG-1, 2 and 2.5. Encoder padding is trimmed when a LAME or Xing tag records it, and left alone when nothing does. |
-| Opus | no | no | Not implemented. No licence stands in the way. An Ogg holding it is refused with the codec named. |
-| Speex, Theora | no | no | Not implemented. Recognised by the same check that names Opus, so an Ogg holding one is refused rather than misread as Vorbis. |
-| AAC | no | no | Not implemented. It carries an active patent licence, which every consumer of this library would inherit. An MP4 holding it says `mp4a`. |
-| WMA | no | no | Not implemented. The format is proprietary and has no published specification to work from. |
 
-Where a format is free to implement, that is why it is here: FLAC and Vorbis are
-royalty-free by design, Apple published the ALAC reference decoder under Apache
-2.0 with the patent grant that licence carries, and MP3's last patents expired
-in 2017.
-
-A file this library cannot decode is reported rather than guessed at, and the
-report names what was found. An `.m4a` holding ALAC is read; the same file
-holding AAC says `mp4a`. An Ogg holding Opus says so, instead of failing as
-though it were broken Vorbis.
+MP4 and Ogg are containers, and each carries more codecs than the table lists.
+Both are read as containers either way: a file holding a codec this build does
+not decode is refused with that codec named, so the error says which one it
+found instead of reading as a damaged file.
 
 ## What's inside
 
@@ -72,17 +59,13 @@ application decoding audio does not pull in a stack it has no use for.
 
 The codecs are ports, not original work, and each names its source in
 [NOTICE](NOTICE): ALAC from Apple's reference implementation (Apache 2.0), both
-its decoder and its encoder; MP3 from
-minimp3 (CC0), Vorbis written against the Xiph specification with `stb_vorbis`
-consulted alongside it. FLAC, AIFF and RIFF are written from their published
-formats. The fingerprint is Haitsma and Kalker's, cited in the module that
-implements it.
+its decoder and its encoder; MP3 from minimp3 (CC0); Vorbis written against the
+Xiph specification with `stb_vorbis` consulted alongside it. FLAC, AIFF and RIFF
+are written from their published formats. The fingerprint is Haitsma and
+Kalker's, cited in the module that implements it.
 
 Development used LLM/agent assistance extensively, on the terms described
-below. One visible consequence: this repo's git history is short and linear,
-with commits landing close together — that reflects an agent pass over formats
-and reference implementations that have existed for decades, not these codecs
-being worked out at that speed from a blank page.
+below.
 
 ## Layout
 
@@ -145,7 +128,7 @@ an independent decoder makes of the same file:
 - The FFT against a transform written straight from its definition, and the
   inverse MDCT against the sum it is supposed to compute.
 
-The two encoders are checked the same way round — against a reference
+The two lossless encoders are checked the same way round — against a reference
 *decoder*, so a mistake shared between this library's own reader and writer
 cannot hide:
 
@@ -158,10 +141,9 @@ cannot hide:
   the frame headers, the mid/side weights and the samples are all covered by
   an implementation sharing nothing with this one.
 
-Each needs its tool installed. Where `flac` or `ffmpeg` is missing, the round
-trip through this library's own reader still runs and the reference check does
-not — so a machine without them tests less, and says so in the suite that
-exists for nothing else.
+Each needs its tool installed. Without `flac` or `ffmpeg` the round trip through
+this library's own reader still runs and the reference check does not, so such a
+machine tests less.
 
 `nimble coverage` merges a run of every suite and reports coverage per module.
 No module sits below 73% of its lines; the whole library is a little under 90%.

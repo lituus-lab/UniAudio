@@ -10,10 +10,9 @@
 ## volume change or a different codec — anything that shifts energy uniformly
 ## cancels out.
 ##
-## It is deliberately not chromaprint. Interoperating with an online database
-## is not the purpose; recognising that two files in one library are the same
-## recording is, and a specified, testable algorithm serves that better than an
-## approximate clone of an implementation.
+## What it is for: recognising that two files in one library hold the same
+## recording. The algorithm comes from the paper rather than from an
+## implementation, so every step of it is testable against a written definition.
 
 import UniMath/native_float
 import contracts

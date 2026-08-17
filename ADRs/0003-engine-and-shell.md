@@ -45,9 +45,10 @@ happened to ask for. Reachable from C, and from Python:
 | fingerprint, and compare two of them | `uaud_fingerprint`, `uaud_similarity`, `uaud_offset_similarity` |
 | release what the library allocated | `uaud_free` |
 
-## Deliberate exclusions
+## What stays Nim-side
 
-These stay Nim-side on purpose. They are not gaps waiting for a consumer.
+These are reachable from Nim only, because the ABI covers what they are for by
+a better route:
 
 - **Per-format readers** — `readFlac`, `readAlac`, `readVorbis`, `readMp3`,
   `readWave`, `readAiff`. `uaud_decode` identifies the container from its bytes

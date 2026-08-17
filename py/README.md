@@ -2,9 +2,9 @@
 <!-- Copyright 2026 lituus-lab -->
 # uniaudio — Python binding
 
-Audio containers, decoders for the formats under no licence, tags, and an
-acoustic fingerprint. A thin binding over the UniAudio C library: what the C
-ABI cannot reach, this cannot reach either.
+Audio containers, decoders, tags and an acoustic fingerprint. A thin binding
+over the UniAudio C library: what the C ABI cannot reach, this cannot reach
+either.
 
 ```bash
 pip install uniaudio
@@ -35,8 +35,8 @@ pass. Three ways out: `write_wave` for uncompressed PCM, `write_flac` and
 
 `probe` returns `(sample_rate, channels, frames)`, where `frames` counts per
 channel. WAV, AIFF, FLAC, ALAC in MP4, Vorbis in Ogg and MP3 all decode; a
-container holding a codec this library does not decode — AAC, Opus — raises a
-`UniAudioError` naming the codec it found.
+container holding a codec this library does not decode raises a `UniAudioError`
+naming the codec it found.
 
 Two recordings can be compared by how they sound rather than by their bytes,
 which finds duplicates no checksum would match:

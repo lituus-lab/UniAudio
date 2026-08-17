@@ -33,11 +33,9 @@ attribution of their own.
 
 ## What the licence decides
 
-Whether a codec can be implemented here is a licensing question before it is a
-technical one, which is why it belongs in this record rather than in the code.
-
-AAC is the case that matters. It is no harder to write than the codecs above,
-and it is absent because it carries an active patent licence: a decoder here
-would hand that obligation to every consumer of the library, including the ones
-who only wanted to read a WAV.
+A codec is implemented here when its licence leaves a consumer owing nothing.
+That question is settled before the technical one, and it is settled in this
+record rather than in the code. A consumer who only wanted to read a WAV
+inherits the terms of everything else in the library, so the bar is the same for
+every format.
 

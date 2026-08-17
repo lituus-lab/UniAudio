@@ -70,13 +70,12 @@ nbCode:
     removeFile(path)
 
 nbText: """
-All three report the same worst difference, and it is not zero. That is worth
-reading carefully, because it is not a flaw in any of them: `tone` holds
+All three report the same worst difference, and it is not zero. `tone` holds
 `float32` samples, the files hold 16-bit integers, and no 16-bit integer sits
-exactly where most of those floats do. Each writer rounds to the nearest one,
-so the worst it can be off by is half a step — 1/65536 — which is the number
-printed. Lossless means the integers survive, not that a float source passes
-through untouched. Ask for 24 bits and the difference shrinks accordingly.
+exactly where most of those floats do. Each writer rounds to the nearest one, so
+the worst it can be off by is half a step — 1/65536, the number printed above.
+Lossless means the integers survive, not that a float source passes through
+untouched. Ask for 24 bits and the difference shrinks by a factor of 256.
 
 The sizes differ for a different reason. The ALAC encoder fits an adaptive
 filter to the signal; the FLAC encoder here uses the format's fixed predictors
@@ -191,22 +190,12 @@ nbCode:
   echo "wav against vorbis: ", similarity(fromWave, fromVorbis)
 
 nbText: """
-## What is deliberately absent
+## When a file cannot be decoded
 
-There is no AAC decoder here. The library implements formats nobody charges
-for: FLAC and Vorbis, royalty-free by design; ALAC, whose reference codec Apple
-released under Apache 2.0, with the patent grant that licence carries; and MP3,
-whose last patents expired in 2017.
-
-AAC is the line that draws itself: it carries an active patent licence, and a
-decoder here would hand that obligation to everything downstream.
-
-A format it does not decode is named in the error rather than approximated:
-knowing a file is AAC and unsupported is something you can act on, "unsupported
-file" is not.
-
-The same rule decides what a recognised container may hold. An MP4 or an Ogg is
-read as a container either way, and the error names the codec found inside.
+MP4 and Ogg are containers, and each carries more codecs than this library
+decodes. Both are recognised as containers either way, so the useful answer is
+available: the error names the codec found inside, which is something you can
+act on where "unsupported file" is not.
 
 ## The other two surfaces
 

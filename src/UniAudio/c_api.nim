@@ -19,16 +19,16 @@ type Status = enum
 
 var lastError {.threadvar.}: string
 
-proc uaud_version(): cstring {.exportc, cdecl, dynlib.} =
+proc uaud_version(): cstring {.exportc, cdecl, dynlib, raises: [].} =
   ## Static version string; do not free.
   UniAudioVersionC
 
-proc uaud_last_error(): cstring {.exportc, cdecl, dynlib.} =
+proc uaud_last_error(): cstring {.exportc, cdecl, dynlib, raises: [].} =
   ## Most recent failure on this thread, "" when there is none. Owned by the
   ## library; valid until the next failing call on the same thread.
   lastError.cstring
 
-proc uaud_container_name(container: cint): cstring {.exportc, cdecl, dynlib.} =
+proc uaud_container_name(container: cint): cstring {.exportc, cdecl, dynlib, raises: [].} =
   ## Name of a container code, or "unknown" for one this build has no name for.
   ## Static; do not free.
   # String literals, not a table built at module scope: this library is
@@ -43,7 +43,7 @@ proc uaud_container_name(container: cint): cstring {.exportc, cdecl, dynlib.} =
   else: cstring"unknown"
 
 proc uaud_sniff(path: cstring; container: ptr cint): cint
-               {.exportc, cdecl, dynlib.} =
+               {.exportc, cdecl, dynlib, raises: [].} =
   ## Identify a file from its leading bytes, without decoding it.
   if path == nil or container == nil:
     lastError = "path and container must be non-null"
@@ -55,12 +55,12 @@ proc uaud_sniff(path: cstring; container: ptr cint): cint
   except IOError, OSError:
     lastError = getCurrentExceptionMsg()
     cint(uaudErrIo)
-  except CatchableError, Defect:
+  except Exception:
     lastError = getCurrentExceptionMsg()
     cint(uaudErrFormat)
 
 proc uaud_probe(path: cstring; sampleRate, channels: ptr cint;
-                frames: ptr clonglong): cint {.exportc, cdecl, dynlib.} =
+                frames: ptr clonglong): cint {.exportc, cdecl, dynlib, raises: [].} =
   ## Shape of any container this build decodes. A container it recognises but
   ## does not decode is named in `uaud_last_error`, not silently skipped.
   if path == nil or sampleRate == nil or channels == nil or frames == nil:
@@ -79,7 +79,7 @@ proc uaud_probe(path: cstring; sampleRate, channels: ptr cint;
   except IOError, OSError:
     lastError = getCurrentExceptionMsg()
     cint(uaudErrIo)
-  except CatchableError, Defect:
+  except Exception:
     lastError = getCurrentExceptionMsg()
     cint(uaudErrFormat)
 
@@ -103,7 +103,7 @@ proc emitBuffer(buffer: AudioBuffer; sampleRate, channels: ptr cint;
 
 proc uaud_decode(path: cstring; sampleRate, channels: ptr cint;
                  frames: ptr clonglong; samples: ptr ptr cfloat): cint
-                {.exportc, cdecl, dynlib.} =
+                {.exportc, cdecl, dynlib, raises: [].} =
   ## Decode a file to interleaved floats in [-1, 1]. `frames` counts per
   ## channel, so the block holds `frames * channels` values.
   if path == nil or sampleRate == nil or channels == nil or frames == nil or
@@ -120,7 +120,7 @@ proc uaud_decode(path: cstring; sampleRate, channels: ptr cint;
   except IOError, OSError:
     lastError = getCurrentExceptionMsg()
     result = cint(uaudErrIo)
-  except CatchableError, Defect:
+  except Exception:
     lastError = getCurrentExceptionMsg()
     result = cint(uaudErrFormat)
 
@@ -128,7 +128,7 @@ proc uaud_decode_resampled(path: cstring; targetRate: cint; toMonoFlag: cint;
                            sampleRate, channels: ptr cint;
                            frames: ptr clonglong;
                            samples: ptr ptr cfloat): cint
-                          {.exportc, cdecl, dynlib.} =
+                          {.exportc, cdecl, dynlib, raises: [].} =
   ## Decode, then optionally average the channels and change the rate. A
   ## `target_rate` of zero leaves the rate alone.
   ##
@@ -154,15 +154,14 @@ proc uaud_decode_resampled(path: cstring; targetRate: cint; toMonoFlag: cint;
   except IOError, OSError:
     lastError = getCurrentExceptionMsg()
     result = cint(uaudErrIo)
-  except CatchableError, Defect:
+  except Exception:
     lastError = getCurrentExceptionMsg()
     result = cint(uaudErrFormat)
 
 proc uaud_write_wave(path: cstring; samples: ptr cfloat; sampleRate,
                      channels: cint; frames: clonglong;
-                     bitsPerSample: cint): cint {.exportc, cdecl, dynlib.} =
-  ## Write interleaved floats as a RIFF/WAVE file. The only format this
-  ## library writes; everything else it only reads.
+                     bitsPerSample: cint): cint {.exportc, cdecl, dynlib, raises: [].} =
+  ## Write interleaved floats as a RIFF/WAVE file, 16 or 24 bits.
   if path == nil or samples == nil:
     lastError = "path and samples must be non-null"
     return cint(uaudErrArg)
@@ -190,13 +189,13 @@ proc uaud_write_wave(path: cstring; samples: ptr cfloat; sampleRate,
   except IOError, OSError:
     lastError = getCurrentExceptionMsg()
     result = cint(uaudErrIo)
-  except CatchableError, Defect:
+  except Exception:
     lastError = getCurrentExceptionMsg()
     result = cint(uaudErrFormat)
 
 proc uaud_write_flac(path: cstring; samples: ptr cfloat; sampleRate,
                      channels: cint; frames: clonglong;
-                     bitsPerSample: cint): cint {.exportc, cdecl, dynlib.} =
+                     bitsPerSample: cint): cint {.exportc, cdecl, dynlib, raises: [].} =
   ## Encode interleaved floats to a native FLAC file, losslessly.
   if path == nil or samples == nil:
     lastError = "path and samples must be non-null"
@@ -222,13 +221,13 @@ proc uaud_write_flac(path: cstring; samples: ptr cfloat; sampleRate,
   except IOError, OSError:
     lastError = getCurrentExceptionMsg()
     result = cint(uaudErrIo)
-  except CatchableError, Defect:
+  except Exception:
     lastError = getCurrentExceptionMsg()
     result = cint(uaudErrFormat)
 
 proc uaud_write_alac(path: cstring; samples: ptr cfloat; sampleRate,
                      channels: cint; frames: clonglong;
-                     bitsPerSample: cint): cint {.exportc, cdecl, dynlib.} =
+                     bitsPerSample: cint): cint {.exportc, cdecl, dynlib, raises: [].} =
   ## Encode interleaved floats to an `.m4a` holding one ALAC track, losslessly.
   if path == nil or samples == nil:
     lastError = "path and samples must be non-null"
@@ -254,17 +253,17 @@ proc uaud_write_alac(path: cstring; samples: ptr cfloat; sampleRate,
   except IOError, OSError:
     lastError = getCurrentExceptionMsg()
     result = cint(uaudErrIo)
-  except CatchableError, Defect:
+  except Exception:
     lastError = getCurrentExceptionMsg()
     result = cint(uaudErrFormat)
 
-proc uaud_free(buffer: pointer) {.exportc, cdecl, dynlib.} =
+proc uaud_free(buffer: pointer) {.exportc, cdecl, dynlib, raises: [].} =
   ## Release a buffer this library allocated. NULL is accepted.
   if buffer != nil: dealloc(buffer)
 
 proc uaud_fingerprint(path: cstring; duration: ptr cdouble;
                       words: ptr ptr uint32; count: ptr cint): cint
-                     {.exportc, cdecl, dynlib.} =
+                     {.exportc, cdecl, dynlib, raises: [].} =
   ## Fingerprint a file. The words are allocated here and released with
   ## `uaud_free`; a recording too short to compare yields a count of zero and
   ## a null pointer, not an error.
@@ -291,7 +290,7 @@ proc uaud_fingerprint(path: cstring; duration: ptr cdouble;
   except IOError, OSError:
     lastError = getCurrentExceptionMsg()
     cint(uaudErrIo)
-  except CatchableError, Defect:
+  except Exception:
     lastError = getCurrentExceptionMsg()
     cint(uaudErrFormat)
 
@@ -317,7 +316,7 @@ func jsonString(text: string): string =
   result.add "\""
 
 proc uaud_tags_json(path: cstring; json: ptr cstring): cint
-                   {.exportc, cdecl, dynlib.} =
+                   {.exportc, cdecl, dynlib, raises: [].} =
   ## What the file says about itself, as a UTF-8 JSON object. The string is
   ## allocated here and released with `uaud_free`.
   ##
@@ -360,12 +359,12 @@ proc uaud_tags_json(path: cstring; json: ptr cstring): cint
   except IOError, OSError:
     lastError = getCurrentExceptionMsg()
     cint(uaudErrIo)
-  except CatchableError, Defect:
+  except Exception:
     lastError = getCurrentExceptionMsg()
     cint(uaudErrFormat)
 
 proc uaud_similarity(a: ptr uint32; aCount: cint; b: ptr uint32;
-                     bCount: cint): cdouble {.exportc, cdecl, dynlib.} =
+                     bCount: cint): cdouble {.exportc, cdecl, dynlib, raises: [].} =
   ## How alike two fingerprints are, in [0, 1]. Two empty fingerprints are
   ## not alike: they are unknown, which reads as 0.
   if a == nil or b == nil or aCount <= 0 or bCount <= 0: return 0.0
@@ -374,11 +373,14 @@ proc uaud_similarity(a: ptr uint32; aCount: cint; b: ptr uint32;
   let rightArray = cast[ptr UncheckedArray[uint32]](b)
   for index in 0 ..< int(aCount): left.words.add leftArray[index]
   for index in 0 ..< int(bCount): right.words.add rightArray[index]
-  cdouble(similarity(left, right))
+  try:
+    cdouble(similarity(left, right))
+  except Exception:
+    0.0
 
 proc uaud_offset_similarity(a: ptr uint32; aCount: cint; b: ptr uint32;
                             bCount: cint; maxShift: cint): cdouble
-                           {.exportc, cdecl, dynlib.} =
+                           {.exportc, cdecl, dynlib, raises: [].} =
   ## The best similarity over a bounded time shift, for two copies of a
   ## recording that start at different points.
   if a == nil or b == nil or aCount <= 0 or bCount <= 0 or maxShift < 0:
@@ -390,11 +392,11 @@ proc uaud_offset_similarity(a: ptr uint32; aCount: cint; b: ptr uint32;
   for index in 0 ..< int(bCount): second.words.add bWords[index]
   try:
     cdouble(offsetSimilarity(first, second, int(maxShift)))
-  except CatchableError, Defect:
+  except Exception:
     0.0
 
 proc uaud_wave_probe(path: cstring; sampleRate, channels: ptr cint;
-                     frames: ptr clonglong): cint {.exportc, cdecl, dynlib.} =
+                     frames: ptr clonglong): cint {.exportc, cdecl, dynlib, raises: [].} =
   ## Shape of a RIFF/WAVE file, without keeping the samples.
   ##
   ## Reads the whole file, because a WAV declares its size in a header that
@@ -419,7 +421,7 @@ proc uaud_wave_probe(path: cstring; sampleRate, channels: ptr cint;
   except IOError, OSError:
     lastError = getCurrentExceptionMsg()
     cint(uaudErrIo)
-  except CatchableError, Defect:
+  except Exception:
     lastError = getCurrentExceptionMsg()
     cint(uaudErrFormat)
 

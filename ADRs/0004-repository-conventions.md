@@ -13,11 +13,12 @@ UniAudio.nimble               package + tasks
 config.nims                   arch-conditional build flags
 src/UniAudio.nim              umbrella, re-exports every public submodule
 src/UniAudio/pcm.nim          the sample buffer every decoder produces
-src/UniAudio/riff.nim         WAV, the only format also written
+src/UniAudio/bitio.nim        writing bits, most significant first
+src/UniAudio/riff.nim         RIFF/WAVE read and write
 src/UniAudio/aiff.nim         AIFF and AIFF-C
-src/UniAudio/flac.nim         FLAC
-src/UniAudio/isobmff.nim      MP4 boxes: where the coded frames are
-src/UniAudio/alac.nim         Apple Lossless
+src/UniAudio/flac.nim         FLAC read and write
+src/UniAudio/isobmff.nim      MP4 boxes: reading them, and building one
+src/UniAudio/alac.nim         Apple Lossless read and write
 src/UniAudio/ogg.nim          Ogg pages into packets
 src/UniAudio/vorbis.nim       Vorbis I
 src/UniAudio/mp3_tables.nim   the constant tables Layer III needs
@@ -56,8 +57,8 @@ LICENSE NOTICE CONTRIBUTING.md SECURITY.md .gitignore README.md AGENTS.md CLAUDE
   higher one. `pcm` is the bottom, `c_api` the top.
 - `UniMath` is the only `Uni*` dependency, for its native float façade.
   Arithmetic is extended there, never rewritten here.
-- A format under an active patent is not implemented. One that is recognised
-  but not decoded is named in the error, never approximated.
+- A format that is recognised but not decoded is named in the error, never
+  approximated. Which codecs are implemented is ADR-0002's subject.
 - A decoder is checked against the reference encoder or an independent
   decoder, never against itself.
 
