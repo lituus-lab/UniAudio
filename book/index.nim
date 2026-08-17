@@ -49,20 +49,40 @@ two are easy to confuse, and confusing them halves or doubles a duration.
 
 ## Writing and reading back
 
-The WAV writer is the one place this library produces a file rather than
-consuming one. It exists so a decode can be checked against something you can
-open elsewhere.
+Three formats go out as well as come in: WAV uncompressed, FLAC and ALAC
+losslessly compressed.
 """
 
 nbCode:
-  let scratch = getTempDir() / "uniaudio-book-tone.wav"
-  writeWaveFile(scratch, tone)
-  let reread = readWaveFile(scratch)
-  echo "read back ", reread.format.frames, " frames at ",
-    reread.format.sampleRate, " Hz"
-  removeFile(scratch)
+  let stem = getTempDir() / "uniaudio-book-tone"
+  writeWaveFile(stem & ".wav", tone)
+  writeFlacFile(stem & ".flac", tone)
+  writeAlacFile(stem & ".m4a", tone)
+  for suffix in [".wav", ".flac", ".m4a"]:
+    let path = stem & suffix
+    let reread = decodeFile(path)
+    var worst = 0.0
+    for index in 0 ..< tone.samples.len:
+      worst = max(worst, abs(float(reread.samples[index]) -
+        float(tone.samples[index])))
+    echo suffix, ": ", getFileSize(path), " bytes, ", reread.format.frames,
+      " frames back, worst difference ", worst
+    removeFile(path)
 
 nbText: """
+All three report the same worst difference, and it is not zero. That is worth
+reading carefully, because it is not a flaw in any of them: `tone` holds
+`float32` samples, the files hold 16-bit integers, and no 16-bit integer sits
+exactly where most of those floats do. Each writer rounds to the nearest one,
+so the worst it can be off by is half a step — 1/65536 — which is the number
+printed. Lossless means the integers survive, not that a float source passes
+through untouched. Ask for 24 bits and the difference shrinks accordingly.
+
+The sizes differ for a different reason. The ALAC encoder fits an adaptive
+filter to the signal; the FLAC encoder here uses the format's fixed predictors
+only, which is what `flac -0` does. On a smooth tone the adaptive filter wins
+easily. Both files decode to exactly the same samples.
+
 ## One entry point, whatever the container
 
 A caller should not have to know what a file is before opening it, and the
@@ -181,7 +201,7 @@ whose last patents expired in 2017.
 AAC is the line that draws itself: it carries an active patent licence, and a
 decoder here would hand that obligation to everything downstream.
 
-A format it will not decode is named in the error rather than approximated:
+A format it does not decode is named in the error rather than approximated:
 knowing a file is AAC and unsupported is something you can act on, "unsupported
 file" is not.
 

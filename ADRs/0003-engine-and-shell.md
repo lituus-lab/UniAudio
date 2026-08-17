@@ -40,6 +40,7 @@ happened to ask for. Reachable from C, and from Python:
 | samples mixed to mono, or at another rate | `uaud_decode_resampled` |
 | write a WAV | `uaud_write_wave` |
 | write a FLAC | `uaud_write_flac` |
+| write an ALAC | `uaud_write_alac` |
 | tags, whichever scheme the file uses | `uaud_tags_json` |
 | fingerprint, and compare two of them | `uaud_fingerprint`, `uaud_similarity`, `uaud_offset_similarity` |
 | release what the library allocated | `uaud_free` |
