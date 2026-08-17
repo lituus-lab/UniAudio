@@ -95,6 +95,15 @@ suite "mp4 containers this build will not decode":
       reason = failure.msg
     check reason.contains("mp4a")
 
+  test "a real AAC track names the codec it found":
+    # Not a patched sample entry: a file ffmpeg encoded as AAC.
+    var reason = ""
+    try:
+      discard readAlacFile(Fixtures / "stereo-aac.m4a")
+    except AudioError as failure:
+      reason = failure.msg
+    check reason.contains("mp4a")
+
   test "bytes that are not an MP4 at all are refused":
     expect AudioError:
       discard readAlac("not an mp4, not even close")
