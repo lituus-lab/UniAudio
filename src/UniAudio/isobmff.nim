@@ -215,4 +215,150 @@ proc sampleData*(data: string; track: AudioTrack; index: int): string
   body:
     data[track.offsets[index] ..< track.offsets[index] + track.sizes[index]]
 
+func putBE(target: var string; value: int64; width: int) =
+  for index in countdown(width - 1, 0):
+    target.add char(uint8((value shr (index * 8)) and 0xFF))
+
+func box(kind: string; payload: string): string =
+  ## A box is its own length, its four-character kind, then its payload.
+  result.putBE(int64(payload.len + 8), 4)
+  result.add kind
+  result.add payload
+
+func fullBox(kind: string; payload: string): string =
+  ## A full box prefixes the payload with a version byte and three flag bytes,
+  ## both zero for everything written here.
+  box(kind, "\0\0\0\0" & payload)
+
+proc buildAudioMp4*(coded: seq[string]; entry: SampleEntry;
+                    framesPerSample, totalFrames: int): string
+    {.contractual.} =
+  ## An `.m4a` holding one audio track: `ftyp`, a `moov` describing where each
+  ## coded frame sits, and the frames themselves in one `mdat` chunk.
+  ##
+  ## `stco` names the offset of that chunk, which depends on how long `moov`
+  ## turned out to be, so `moov` is built twice — once to learn its length,
+  ## once with the offset that length implies. The second build is the same
+  ## size as the first, because the offset field is a fixed four bytes.
+  require:
+    coded.len > 0
+    framesPerSample > 0
+    totalFrames > 0
+    entry.channels in 1 .. 2
+    entry.sampleRate in 1 .. MaxSampleRate
+    entry.format.len == 4
+  body:
+    var mdatBody: string
+    var sizes: seq[int]
+    for frame in coded:
+      sizes.add frame.len
+      mdatBody.add frame
+
+    # The last sample carries whatever is left over, so `stts` needs two runs
+    # unless the frame count divides evenly.
+    let tail = totalFrames - (coded.len - 1) * framesPerSample
+    var stts: string
+    if tail == framesPerSample:
+      stts.putBE(1, 4)
+      stts.putBE(int64(coded.len), 4)
+      stts.putBE(int64(framesPerSample), 4)
+    else:
+      stts.putBE(if coded.len == 1: 1 else: 2, 4)
+      if coded.len > 1:
+        stts.putBE(int64(coded.len - 1), 4)
+        stts.putBE(int64(framesPerSample), 4)
+      stts.putBE(1, 4)
+      stts.putBE(int64(tail), 4)
+
+    var stsz: string
+    stsz.putBE(0, 4) # sizes differ per sample, so the table follows
+    stsz.putBE(int64(sizes.len), 4)
+    for size in sizes: stsz.putBE(int64(size), 4)
+
+    var stsc: string
+    stsc.putBE(1, 4) # one run: chunk 1 onwards
+    stsc.putBE(1, 4)
+    stsc.putBE(int64(coded.len), 4)
+    stsc.putBE(1, 4)
+
+    var sampleEntry: string
+    sampleEntry.putBE(0, 6) # reserved
+    sampleEntry.putBE(1, 2) # data reference index
+    sampleEntry.putBE(0, 8) # reserved
+    sampleEntry.putBE(int64(entry.channels), 2)
+    sampleEntry.putBE(int64(entry.bitsPerSample), 2)
+    sampleEntry.putBE(0, 2) # pre-defined
+    sampleEntry.putBE(0, 2) # reserved
+    sampleEntry.putBE(int64(entry.sampleRate) shl 16, 4) # 16.16 fixed point
+    sampleEntry.add fullBox(entry.format, entry.setup)
+    var stsd: string
+    stsd.putBE(1, 4) # one entry
+    stsd.add box(entry.format, sampleEntry)
+
+    var dref: string
+    dref.putBE(1, 4)
+    # A "url " whose self-contained flag is set: the media is in this file.
+    dref.add box("url ", "\0\0\0\1")
+
+    const identity = [0x00010000, 0, 0, 0, 0x00010000, 0, 0, 0, 0x40000000]
+
+    var mvhd: string
+    mvhd.putBE(0, 8) # creation and modification time, left unset
+    mvhd.putBE(int64(entry.sampleRate), 4)
+    mvhd.putBE(int64(totalFrames), 4)
+    mvhd.putBE(0x00010000, 4) # rate 1.0
+    mvhd.putBE(0x0100, 2) # volume 1.0
+    mvhd.putBE(0, 10) # reserved
+    for value in identity: mvhd.putBE(int64(value), 4)
+    mvhd.putBE(0, 24) # pre-defined
+    mvhd.putBE(2, 4) # next track id
+
+    var tkhd: string
+    tkhd.putBE(0, 8)
+    tkhd.putBE(1, 4) # track id
+    tkhd.putBE(0, 4) # reserved
+    tkhd.putBE(int64(totalFrames), 4)
+    tkhd.putBE(0, 8) # reserved
+    tkhd.putBE(0, 2) # layer
+    tkhd.putBE(0, 2) # alternate group
+    tkhd.putBE(0x0100, 2) # volume 1.0
+    tkhd.putBE(0, 2) # reserved
+    for value in identity: tkhd.putBE(int64(value), 4)
+    tkhd.putBE(0, 8) # width and height, zero for audio
+
+    var mdhd: string
+    mdhd.putBE(0, 8)
+    mdhd.putBE(int64(entry.sampleRate), 4)
+    mdhd.putBE(int64(totalFrames), 4)
+    mdhd.putBE(0x55C4, 2) # "und": no language claimed
+    mdhd.putBE(0, 2) # pre-defined
+
+    var hdlr: string
+    hdlr.putBE(0, 4) # pre-defined
+    hdlr.add "soun"
+    hdlr.putBE(0, 12) # reserved
+    hdlr.add '\0' # an empty name
+
+    let dinf = box("dinf", fullBox("dref", dref))
+    let smhd = fullBox("smhd", "\0\0\0\0") # balance, then reserved
+    let ftyp = box("ftyp", "M4A \0\0\0\0M4A mp42isom")
+
+    var moov: string
+    for attempt in 0 .. 1:
+      # The first pass measures; the second writes the offset that measurement
+      # implies. `mdat`'s payload starts eight bytes past the end of `moov`.
+      let chunkOffset = if attempt == 0: 0 else: ftyp.len + moov.len + 8
+      var stco: string
+      stco.putBE(1, 4)
+      stco.putBE(int64(chunkOffset), 4)
+      let stbl = box("stbl", fullBox("stsd", stsd) & fullBox("stts", stts) &
+        fullBox("stsc", stsc) & fullBox("stsz", stsz) & fullBox("stco", stco))
+      let minf = box("minf", smhd & dinf & stbl)
+      let mdia = box("mdia", fullBox("mdhd", mdhd) & fullBox("hdlr", hdlr) &
+        minf)
+      let trak = box("trak", fullBox("tkhd", tkhd) & mdia)
+      moov = box("moov", fullBox("mvhd", mvhd) & trak)
+
+    ftyp & moov & box("mdat", mdatBody)
+
 
