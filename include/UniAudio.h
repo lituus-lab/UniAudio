@@ -126,6 +126,26 @@ double uaud_offset_similarity(const unsigned int *a, int a_count,
 int uaud_wave_probe(const char *path, int *sample_rate, int *channels,
                     long long *frames);
 
+/* Start a RIFF/WAVE file whose length is not known yet, 16 or 24 bits. The
+ * batch writer above needs every sample at once; this one takes them as they
+ * arrive. On success *writer holds a handle, released by
+ * uaud_wave_writer_close — which is also what patches the sizes the header
+ * declares, so a file abandoned without it does not read back as a WAV. */
+int uaud_wave_writer_open(const char *path, int sample_rate, int channels,
+                          int bits_per_sample, void **writer);
+
+/* Append count interleaved values: whole frames only, channels values each.
+ * A partial frame is refused rather than padded. */
+int uaud_wave_writer_write(void *writer, const float *samples,
+                           long long count);
+
+/* Frames written so far, per channel. */
+int uaud_wave_writer_frames(void *writer, long long *frames);
+
+/* Patch the sizes, close the file and release the handle. The handle is spent:
+ * passing it again is undefined, as with a pointer already freed. */
+int uaud_wave_writer_close(void *writer);
+
 #ifdef __cplusplus
 }
 #endif

@@ -82,6 +82,46 @@ filter to the signal; the FLAC encoder here uses the format's fixed predictors
 only, which is what `flac -0` does. On a smooth tone the adaptive filter wins
 easily. Both files decode to exactly the same samples.
 
+## Writing a file whose length you do not know yet
+
+`writeWaveFile` needs every sample at once. A recording being captured does not
+have them: it has the block that just arrived. `newWaveWriter` writes the header
+with provisional sizes, takes frames as they come, and patches the sizes at
+`close`.
+"""
+
+nbCode:
+  let streamed = getTempDir() / "uniaudio-book-streamed.wav"
+  block:
+    var writer = newWaveWriter(streamed, tone.format.sampleRate,
+                               tone.format.channels)
+    # Blocks of whatever size arrives; the split must not reach the file.
+    var sent = 0
+    for size in [64, 300, 1000]:
+      let take = min(size * tone.format.channels, tone.samples.len - sent)
+      if take <= 0: break
+      writer.writeFrames(tone.samples.toOpenArray(sent, sent + take - 1))
+      sent += take
+    writer.writeFrames(tone.samples.toOpenArray(sent, tone.samples.len - 1))
+    echo "frames written: ", writer.frameCount
+    writer.close()
+
+  let batch = getTempDir() / "uniaudio-book-batch.wav"
+  writeWaveFile(batch, tone)
+  echo "same bytes as the batch writer: ",
+    readFile(streamed) == readFile(batch)
+  removeFile(streamed)
+  removeFile(batch)
+
+nbText: """
+The two files are identical, byte for byte. Both quantise the same way, so
+where the block boundaries fell leaves no trace — which is the property that
+makes a streamed capture safe to compare against a file written in one go.
+
+A writer that is never closed leaves the provisional sizes in place, and the
+file does not read back as a WAV at all — however many frames went into it.
+That is the one thing to get right: `close` is what finishes the file.
+
 ## One entry point, whatever the container
 
 A caller should not have to know what a file is before opening it, and the

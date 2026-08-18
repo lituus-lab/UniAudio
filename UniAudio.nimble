@@ -41,6 +41,7 @@ task docs, "API reference + book into pages/ — what CI publishes":
 task test, "Nim tests (debug, contracts active)":
   exec "nim c -r --path:src -o:build/test_bitio tests/test_bitio.nim"
   exec "nim c -r --path:src -o:build/test_pcm tests/test_pcm.nim"
+  exec "nim c -r --path:src -o:build/test_wave_writer tests/test_wave_writer.nim"
   exec "nim c -r --path:src -o:build/test_aiff tests/test_aiff.nim"
   exec "nim c -r --path:src -o:build/test_flac tests/test_flac.nim"
   exec "nim c -r --path:src -o:build/test_alac tests/test_alac.nim"
@@ -54,6 +55,7 @@ task test, "Nim tests (debug, contracts active)":
 task testRelease, "Nim tests (release, contracts compiled away)":
   exec "nim c -r -d:release --path:src -o:build/test_bitio_rel tests/test_bitio.nim"
   exec "nim c -r -d:release --path:src -o:build/test_pcm_rel tests/test_pcm.nim"
+  exec "nim c -r -d:release --path:src -o:build/test_wave_writer_rel tests/test_wave_writer.nim"
   exec "nim c -r -d:release --path:src -o:build/test_aiff_rel tests/test_aiff.nim"
   exec "nim c -r -d:release --path:src -o:build/test_flac_rel tests/test_flac.nim"
   exec "nim c -r -d:release --path:src -o:build/test_alac_rel tests/test_alac.nim"

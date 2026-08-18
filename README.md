@@ -29,7 +29,8 @@ found instead of reading as a damaged file.
 - **Sample buffers** — `src/UniAudio/pcm.nim`. One interleaved float32 shape
   every decoder produces, plus channel mixing and rate conversion.
 - **Uncompressed containers** — `src/UniAudio/riff.nim`,
-  `src/UniAudio/aiff.nim`. WAV is written as well as read; AIFF is read.
+  `src/UniAudio/aiff.nim`. WAV is written as well as read, either from a whole
+  buffer or as the samples arrive; AIFF is read.
 - **Lossless codecs** — `src/UniAudio/flac.nim`, `src/UniAudio/alac.nim` over
   `src/UniAudio/isobmff.nim`, which finds the coded frames inside an MP4 and
   builds the MP4 the written ones travel in. Both codecs encode as well as

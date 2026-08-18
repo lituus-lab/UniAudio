@@ -8,10 +8,10 @@ Audio containers, patent-free decoders and acoustic fingerprinting::
 
     rate, channels, frames = wave_probe("take.wav")
 """
-from ._core import (UniAudioError, decode, decode_resampled, fingerprint,
-                    offset_similarity, probe, similarity, sniff, tags,
-                    version as _version_c, wave_probe, write_alac, write_flac,
-                    write_wave)
+from ._core import (UniAudioError, WaveWriter, decode, decode_resampled,
+                    fingerprint, offset_similarity, probe, similarity, sniff,
+                    tags, version as _version_c, wave_probe, write_alac,
+                    write_flac, write_wave)
 
 __version__ = _version_c().decode("ascii")
 
@@ -21,7 +21,7 @@ def version():
     return _version_c().decode("ascii")
 
 
-__all__ = ["UniAudioError", "decode", "decode_resampled", "fingerprint",
-           "offset_similarity", "probe", "similarity", "sniff", "tags",
-           "version", "wave_probe", "write_alac", "write_flac", "write_wave",
-           "__version__"]
+__all__ = ["UniAudioError", "WaveWriter", "decode", "decode_resampled",
+           "fingerprint", "offset_similarity", "probe", "similarity", "sniff",
+           "tags", "version", "wave_probe", "write_alac", "write_flac",
+           "write_wave", "__version__"]
