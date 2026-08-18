@@ -16,10 +16,6 @@ import contracts
 import ./pcm
 
 const
-  MaxChunkBytes* = 512 * 1024 * 1024
-    ## A chunk larger than this is refused rather than allocated. Half a
-    ## gigabyte is hours of CD-quality audio; a header claiming more is either
-    ## damaged or hostile.
   FormatPcm = 1
   FormatFloat = 3
   FormatExtensible = 0xFFFE
@@ -208,6 +204,34 @@ proc writeU32(stream: Stream; value: int) =
   for shift in [0, 8, 16, 24]:
     stream.write(uint8((value shr shift) and 0xFF))
 
+func quantise*(sample: float32; bitsPerSample: int): int32 =
+  ## One float sample as the integer a WAV of this depth stores.
+  ##
+  ## Round, then clamp. Truncating instead would cost up to a whole step and
+  ## pull every sample towards silence, because it always rounds inwards — and
+  ## a library with two writers that quantise differently produces two
+  ## different files from one buffer, which is a trap in any round-trip test.
+  ##
+  ## The range is asymmetric because the format's is: at sixteen bits, -1 maps
+  ## to -32768 and +1 clamps to 32767, so the most negative code is reachable
+  ## and the most positive one is not.
+  let peak = float32(1 shl (bitsPerSample - 1))
+  var scaled = round(sample * peak)
+  if scaled > peak - 1: scaled = peak - 1
+  if scaled < -peak: scaled = -peak
+  int32(scaled)
+
+proc writePcm(stream: Stream; sample: float32; bitsPerSample: int) =
+  ## One quantised sample, little-endian, in `bitsPerSample div 8` bytes.
+  let value = quantise(sample, bitsPerSample)
+  for index in 0 ..< bitsPerSample div 8:
+    stream.write(uint8((value shr (8 * index)) and 0xFF))
+
+const MaxRiffData* = high(uint32).int - 44
+  ## A RIFF declares its sizes in 32 bits, so no WAV holds more than four
+  ## gigabytes of samples less its header. A writer told to exceed it stops
+  ## rather than wrapping the field and producing a file that reads as tiny.
+
 proc writeWave*(stream: Stream; buffer: AudioBuffer; bitsPerSample = 16)
     {.contractual.} =
   ## Write 16- or 24-bit integer PCM. Samples outside [-1, 1] are clamped
@@ -216,6 +240,10 @@ proc writeWave*(stream: Stream; buffer: AudioBuffer; bitsPerSample = 16)
     buffer.format.isValid
     buffer.samples.len == buffer.format.sampleCount
   body:
+    let dataBytes = buffer.samples.len * (bitsPerSample div 8)
+    if dataBytes > MaxRiffData:
+      raise newException(AudioError,
+        "wav: this would pass the size a RIFF header can declare")
     # Checked in the body, not as a precondition: the depth comes from the
     # caller, and a precondition compiles away under -d:release, which would
     # leave a release build writing a malformed file in silence.
@@ -223,7 +251,6 @@ proc writeWave*(stream: Stream; buffer: AudioBuffer; bitsPerSample = 16)
       raise newException(AudioError,
         "wav: cannot write " & $bitsPerSample & " bits; 16 or 24")
     let bytesPerSample = bitsPerSample div 8
-    let dataBytes = buffer.samples.len * bytesPerSample
     stream.write("RIFF")
     stream.writeU32(36 + dataBytes)
     stream.write("WAVE")
@@ -238,16 +265,8 @@ proc writeWave*(stream: Stream; buffer: AudioBuffer; bitsPerSample = 16)
     stream.writeU16(bitsPerSample)
     stream.write("data")
     stream.writeU32(dataBytes)
-    let peak = float32(1 shl (bitsPerSample - 1))
     for sample in buffer.samples:
-      # Round, then clamp. Truncating instead would cost up to a whole step and
-      # pull every sample towards silence, because it always rounds inwards.
-      var scaled = round(sample * peak)
-      if scaled > peak - 1: scaled = peak - 1
-      if scaled < -peak: scaled = -peak
-      let value = int32(scaled)
-      for index in 0 ..< bytesPerSample:
-        stream.write(uint8((value shr (8 * index)) and 0xFF))
+      stream.writePcm(sample, bitsPerSample)
 
 proc writeWaveFile*(path: string; buffer: AudioBuffer; bitsPerSample = 16)
     {.contractual.} =
@@ -262,5 +281,138 @@ proc writeWaveFile*(path: string; buffer: AudioBuffer; bitsPerSample = 16)
       raise newException(IOError, "wav: cannot write " & path)
     defer: stream.close()
     writeWave(stream, buffer, bitsPerSample)
+
+
+
+type WaveWriter* = object
+  ## A WAV being written as its samples arrive.
+  ##
+  ## The batch writer needs the whole buffer, which a recording of unknown
+  ## length does not have. This one writes the header with provisional sizes,
+  ## appends frames, and patches the two size fields at `close`.
+  ##
+  ## Both writers quantise through `quantise`, so a file written either way
+  ## from the same samples is byte for byte the same.
+  stream: Stream
+  channels, sampleRate, bitsPerSample: int
+  samples: int ## values written, not frames
+  ownsStream: bool
+    ## Whether `close` should close the stream as well as finish the file.
+    ## True only for the path constructor: a caller that passed its own stream
+    ## keeps it, and closing a `StringStream` discards its data.
+  closed: bool
+
+proc newWaveWriter*(stream: Stream; sampleRate, channels: int;
+                    bitsPerSample = 16): WaveWriter {.contractual.} =
+  ## Write the header into `stream`, ready for frames.
+  ##
+  ## The sizes it declares are provisional and patched at `close`, which needs
+  ## one seek — so the stream must be one that can seek. A file or a string
+  ## both are; a pipe is not.
+  ##
+  ## Nothing is required of the caller. Every argument is checked in the body
+  ## and raises `AudioError`: a precondition compiles away under `-d:release`,
+  ## so one here would refuse a bad rate in debug and write a malformed header
+  ## in release — and stating it twice makes the body's check unreachable in
+  ## debug, which is how the two builds come to disagree about the exception.
+  body:
+    if bitsPerSample notin [16, 24]:
+      raise newException(AudioError,
+        "wav: cannot write " & $bitsPerSample & " bits; 16 or 24")
+    if sampleRate notin 1 .. MaxSampleRate:
+      raise newException(AudioError, "wav: sample rate out of range")
+    if channels notin 1 .. MaxChannels:
+      raise newException(AudioError, "wav: channel count out of range")
+    if stream == nil:
+      raise newException(IOError, "wav: no stream to write to")
+
+    result.stream = stream
+    result.sampleRate = sampleRate
+    result.channels = channels
+    result.bitsPerSample = bitsPerSample
+    let bytesPerSample = bitsPerSample div 8
+    stream.write("RIFF")
+    stream.writeU32(0) # patched at close
+    stream.write("WAVE")
+    stream.write("fmt ")
+    stream.writeU32(16)
+    stream.writeU16(FormatPcm)
+    stream.writeU16(channels)
+    stream.writeU32(sampleRate)
+    stream.writeU32(sampleRate * channels * bytesPerSample)
+    stream.writeU16(channels * bytesPerSample)
+    stream.writeU16(bitsPerSample)
+    stream.write("data")
+    stream.writeU32(0) # patched at close
+
+proc newWaveWriter*(path: string; sampleRate, channels: int;
+                    bitsPerSample = 16): WaveWriter {.contractual.} =
+  ## `newWaveWriter` over a file. A path that cannot be opened for writing
+  ## raises `IOError`; anything else the writer does not accept raises
+  ## `AudioError`, in either build.
+  require:
+    path.len > 0
+  body:
+    let stream = newFileStream(path, fmWrite)
+    if stream == nil:
+      raise newException(IOError, "wav: cannot write " & path)
+    result = newWaveWriter(stream, sampleRate, channels, bitsPerSample)
+    result.ownsStream = true
+
+proc writeFrames*(writer: var WaveWriter; samples: openArray[float32])
+    {.contractual.} =
+  ## Append interleaved samples: a whole number of frames, `channels` values
+  ## each. Samples outside [-1, 1] are clamped rather than left to wrap.
+  ##
+  ## A partial frame is refused rather than padded — half a frame would shift
+  ## every channel after it, which no later write can undo.
+  require:
+    not writer.closed
+  body:
+    if writer.stream == nil:
+      raise newException(IOError, "wav: writer is closed")
+    if samples.len mod writer.channels != 0:
+      raise newException(AudioError,
+        "wav: a block must hold whole frames, not a partial one")
+    let bytesPerSample = writer.bitsPerSample div 8
+    if samples.len > (MaxRiffData div bytesPerSample) - writer.samples:
+      raise newException(AudioError,
+        "wav: this would pass the size a RIFF header can declare")
+    for sample in samples:
+      writer.stream.writePcm(sample, writer.bitsPerSample)
+    writer.samples += samples.len
+
+proc close*(writer: var WaveWriter) {.contractual.} =
+  ## Patch the two size fields and finish the file. The writer is spent
+  ## afterwards.
+  ##
+  ## A file with no frames is still a valid WAV — an empty recording is a fact,
+  ## not an error — so this does not refuse one.
+  ##
+  ## The stream is closed only when this writer opened it: a caller that passed
+  ## its own keeps it, and closing a `StringStream` discards the data it came
+  ## for.
+  require:
+    not writer.closed
+  body:
+    # A default-constructed writer never opened a stream. Saying nothing is
+    # better than dereferencing nothing.
+    if writer.stream == nil:
+      writer.closed = true
+      return
+    writer.closed = true
+    let dataBytes = writer.samples * (writer.bitsPerSample div 8)
+    writer.stream.setPosition(4)
+    writer.stream.writeU32(36 + dataBytes)
+    writer.stream.setPosition(40)
+    writer.stream.writeU32(dataBytes)
+    if writer.ownsStream: writer.stream.close()
+    else: writer.stream.setPosition(44 + dataBytes)
+
+func frameCount*(writer: WaveWriter): int =
+  ## Frames written so far, per channel. Zero for a writer that never opened
+  ## anything, which has no channel count to divide by.
+  if writer.channels <= 0: 0
+  else: writer.samples div writer.channels
 
 

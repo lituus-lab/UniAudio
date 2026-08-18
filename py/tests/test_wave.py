@@ -8,9 +8,10 @@ import struct
 
 import pytest
 
-from uniaudio import (UniAudioError, decode, decode_resampled, fingerprint,
-                      offset_similarity, probe, similarity, sniff, tags,
-                      version, wave_probe, write_alac, write_flac, write_wave)
+from uniaudio import (UniAudioError, WaveWriter, decode, decode_resampled,
+                      fingerprint, offset_similarity, probe, similarity, sniff,
+                      tags, version, wave_probe, write_alac, write_flac,
+                      write_wave)
 
 FIXTURES = pathlib.Path(__file__).resolve().parents[2] / "tests" / "fixtures"
 
@@ -238,3 +239,72 @@ def test_write_alac_refuses_what_it_does_not_implement(tmp_path):
     thirds = samples[: len(samples) // 3 * 3]
     with pytest.raises(UniAudioError):
         write_alac(tmp_path / "wide.m4a", thirds, rate, 3, 16)
+
+
+def _tone(frames, channels=2):
+    """Interleaved samples that exercise both signs and the clamp at the ends."""
+    out = array.array("f")
+    for index in range(frames):
+        value = math.sin(index * 0.05)
+        for channel in range(channels):
+            out.append(value if channel % 2 == 0 else -value)
+    return out
+
+
+def test_streaming_writer_lands_on_the_same_bytes_as_the_batch_writer(tmp_path):
+    samples = _tone(500)
+    batch = tmp_path / "batch.wav"
+    streamed = tmp_path / "streamed.wav"
+    write_wave(batch, samples, 8000, 2)
+    with WaveWriter(streamed, 8000, 2) as writer:
+        # Two unequal blocks: where the split falls must not reach the file.
+        writer.write(samples[:200 * 2])
+        writer.write(samples[200 * 2:])
+    assert streamed.read_bytes() == batch.read_bytes()
+
+
+def test_streaming_writer_counts_frames_per_channel(tmp_path):
+    path = tmp_path / "counted.wav"
+    with WaveWriter(path, 8000, 2) as writer:
+        assert writer.frame_count == 0
+        writer.write(_tone(120))
+        assert writer.frame_count == 120
+        writer.write(_tone(30))
+        assert writer.frame_count == 150
+    assert wave_probe(path) == (8000, 2, 150)
+
+
+def test_a_writer_left_unclosed_still_finishes_the_file(tmp_path):
+    path = tmp_path / "dropped.wav"
+    writer = WaveWriter(path, 8000, 1)
+    writer.write(_tone(64, channels=1))
+    del writer  # __dealloc__ patches the sizes the header declares
+    assert wave_probe(path) == (8000, 1, 64)
+
+
+def test_a_partial_frame_is_refused_rather_than_padded(tmp_path):
+    with WaveWriter(tmp_path / "partial.wav", 8000, 2) as writer:
+        with pytest.raises(ValueError):
+            writer.write(array.array("f", [0.0]))
+
+
+def test_a_closed_writer_refuses_further_work(tmp_path):
+    writer = WaveWriter(tmp_path / "closed.wav", 8000, 1)
+    writer.close()
+    writer.close()  # closing twice is a no-op, not a second free
+    with pytest.raises(ValueError):
+        writer.write(array.array("f", [0.0]))
+    with pytest.raises(ValueError):
+        writer.frame_count
+
+
+def test_a_width_the_writer_does_not_implement_is_refused(tmp_path):
+    with pytest.raises(UniAudioError):
+        WaveWriter(tmp_path / "eight.wav", 8000, 1, bits_per_sample=8)
+
+
+def test_an_empty_streamed_file_is_still_a_valid_wave(tmp_path):
+    path = tmp_path / "empty.wav"
+    with WaveWriter(path, 8000, 1):
+        pass
+    assert wave_probe(path) == (8000, 1, 0)

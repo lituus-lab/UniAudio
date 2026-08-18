@@ -45,6 +45,12 @@ cdef extern from "UniAudio.h":
                            const unsigned int *b, int b_count)
     int uaud_wave_probe(const char *path, int *sample_rate, int *channels,
                         long long *frames)
+    int uaud_wave_writer_open(const char *path, int sample_rate, int channels,
+                              int bits_per_sample, void **writer)
+    int uaud_wave_writer_write(void *writer, const float *samples,
+                               long long count)
+    int uaud_wave_writer_frames(void *writer, long long *frames)
+    int uaud_wave_writer_close(void *writer)
 
 
 class UniAudioError(RuntimeError):
@@ -315,3 +321,87 @@ def similarity(a, b):
     finally:
         free(lbuf)
         free(rbuf)
+
+
+cdef class WaveWriter:
+    """A WAV written as its samples arrive, rather than all at once.
+
+    `write_wave` needs every sample in memory; this takes them in blocks, which
+    is what a recording of unknown length has. `close` patches the sizes the
+    header declares, without which the file does not read back as a WAV; a
+    writer that is simply dropped is closed when it is collected, and as a
+    context manager it is closed at a point you choose.
+    """
+
+    cdef void *_handle
+    cdef int _channels
+
+    def __cinit__(self, path, sample_rate, channels, bits_per_sample=16):
+        self._handle = NULL
+        self._channels = channels
+        if channels <= 0:
+            raise ValueError("channels must be positive")
+        cdef bytes encoded = str(path).encode("utf-8")
+        cdef void *handle = NULL
+        cdef int status = uaud_wave_writer_open(encoded, sample_rate, channels,
+                                                bits_per_sample, &handle)
+        if status != 0:
+            raise UniAudioError(status,
+                                uaud_last_error().decode("utf-8", "replace"))
+        self._handle = handle
+
+    def write(self, samples):
+        """Append interleaved samples: whole frames only, `channels` each."""
+        if self._handle == NULL:
+            raise ValueError("writer is closed")
+        cdef const float[::1] view
+        try:
+            view = samples
+        except (TypeError, ValueError, BufferError):
+            view = _array.array("f", samples)
+        cdef Py_ssize_t count = view.shape[0]
+        if count == 0:
+            return
+        if count % self._channels:
+            raise ValueError("sample count is not a whole number of frames")
+        cdef int status = uaud_wave_writer_write(self._handle, &view[0], count)
+        if status != 0:
+            raise UniAudioError(status,
+                                uaud_last_error().decode("utf-8", "replace"))
+
+    @property
+    def frame_count(self):
+        """Frames written so far, per channel."""
+        if self._handle == NULL:
+            raise ValueError("writer is closed")
+        cdef long long frames = 0
+        cdef int status = uaud_wave_writer_frames(self._handle, &frames)
+        if status != 0:
+            raise UniAudioError(status,
+                                uaud_last_error().decode("utf-8", "replace"))
+        return frames
+
+    def close(self):
+        """Finish the file. Closing an already-closed writer does nothing."""
+        if self._handle == NULL:
+            return
+        cdef void *handle = self._handle
+        # Cleared first: the handle is spent whether or not the close reports
+        # an error, and passing it again would be a use after free.
+        self._handle = NULL
+        cdef int status = uaud_wave_writer_close(handle)
+        if status != 0:
+            raise UniAudioError(status,
+                                uaud_last_error().decode("utf-8", "replace"))
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False
+
+    def __dealloc__(self):
+        if self._handle != NULL:
+            uaud_wave_writer_close(self._handle)
+            self._handle = NULL

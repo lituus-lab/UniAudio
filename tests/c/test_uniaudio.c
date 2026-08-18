@@ -274,6 +274,58 @@ int main(void) {
     assert(uaud_offset_similarity(NULL, 0, shifted, 4, 8) == 0.0);
   }
 
+  /* The streaming writer takes samples as they arrive, and must land on the
+   * same bytes as the batch writer given the same samples — both quantise the
+   * same way, so a difference would mean one of the two paths drifted. */
+  {
+    char streamed[512];
+    snprintf(streamed, sizeof streamed, "%suniaudio_capi_stream.wav",
+             tmp ? tmp : "/tmp/");
+    void *writer = NULL;
+    long long counted = -1;
+    assert(uaud_wave_writer_open(streamed, 8000, 2, 16, &writer) == UAUD_OK);
+    assert(writer != NULL);
+    assert(uaud_wave_writer_frames(writer, &counted) == UAUD_OK);
+    assert(counted == 0);
+    /* Two unequal batches: the split must not show up in the file. */
+    assert(uaud_wave_writer_write(writer, written, 300 * 2) == UAUD_OK);
+    assert(uaud_wave_writer_write(writer, written + 300 * 2,
+                                  (RoundFrames - 300) * 2) == UAUD_OK);
+    assert(uaud_wave_writer_frames(writer, &counted) == UAUD_OK);
+    assert(counted == RoundFrames);
+    /* Half a frame is refused rather than padded. */
+    assert(uaud_wave_writer_write(writer, written, 1) == UAUD_ERR_ARG);
+    assert(uaud_wave_writer_close(writer) == UAUD_OK);
+
+    FILE *a = fopen(round, "rb");
+    FILE *b = fopen(streamed, "rb");
+    assert(a != NULL && b != NULL);
+    int ca, cb;
+    long offset = 0;
+    do {
+      ca = fgetc(a);
+      cb = fgetc(b);
+      assert(ca == cb);
+      offset++;
+    } while (ca != EOF && cb != EOF);
+    fclose(a);
+    fclose(b);
+    assert(offset > 44); /* header plus data, not an empty file */
+
+    void *rejected = NULL;
+    assert(uaud_wave_writer_open(NULL, 8000, 2, 16, &rejected) == UAUD_ERR_ARG);
+    assert(uaud_wave_writer_open(streamed, 8000, 2, 8, &rejected) == UAUD_ERR_ARG);
+    assert(uaud_wave_writer_open("", 8000, 2, 16, &rejected) == UAUD_ERR_ARG);
+    assert(uaud_wave_writer_open(streamed, 0, 2, 16, &rejected) == UAUD_ERR_ARG);
+    assert(uaud_wave_writer_open(streamed, 8000, 0, 16, &rejected) == UAUD_ERR_ARG);
+    assert(rejected == NULL);
+    assert(uaud_wave_writer_open(streamed, 8000, 2, 16, NULL) == UAUD_ERR_ARG);
+    assert(uaud_wave_writer_write(NULL, written, 2) == UAUD_ERR_ARG);
+    assert(uaud_wave_writer_frames(NULL, &counted) == UAUD_ERR_ARG);
+    assert(uaud_wave_writer_close(NULL) == UAUD_ERR_ARG);
+    remove(streamed);
+  }
+
   remove(round);
   remove(tagged);
   remove(path);

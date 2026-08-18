@@ -426,3 +426,122 @@ proc uaud_wave_probe(path: cstring; sampleRate, channels: ptr cint;
     cint(uaudErrFormat)
 
 
+type WaveWriterHandle = ref object
+  ## Keeps a `WaveWriter` alive while C holds a pointer to it. The writer is an
+  ## object, so a `ref` is what there is to pin: `GC_ref` at open, `GC_unref` at
+  ## close, and nothing between the two moves it.
+  writer: WaveWriter
+  channels: int ## kept so a partial frame is refused before the writer sees it
+
+proc uaud_wave_writer_open(path: cstring; sampleRate, channels,
+                           bitsPerSample: cint; writer: ptr pointer): cint
+                          {.exportc, cdecl, dynlib, raises: [].} =
+  ## Start a RIFF/WAVE file whose length is not known yet, 16 or 24 bits.
+  ##
+  ## The batch writer needs every sample at once; this one takes them as they
+  ## arrive. The handle is released by `uaud_wave_writer_close`, which is also
+  ## what patches the sizes the header declares. A file abandoned without it
+  ## keeps the provisional sizes and does not read back as a WAV at all,
+  ## whatever reached the disk.
+  if path == nil or writer == nil:
+    lastError = "path and writer must be non-null"
+    return cint(uaudErrArg)
+  writer[] = nil
+  if ($path).len == 0:
+    lastError = "path must not be empty"
+    return cint(uaudErrArg)
+  if sampleRate <= 0 or sampleRate > cint(MaxSampleRate) or channels <= 0 or
+      channels > cint(MaxChannels):
+    lastError = "sample rate or channel count out of range"
+    return cint(uaudErrArg)
+  if bitsPerSample notin [cint(16), cint(24)]:
+    lastError = "bits per sample must be 16 or 24"
+    return cint(uaudErrArg)
+  try:
+    let handle = WaveWriterHandle(
+      writer: newWaveWriter($path, int(sampleRate), int(channels),
+                            int(bitsPerSample)),
+      channels: int(channels))
+    GC_ref(handle)
+    writer[] = cast[pointer](handle)
+    lastError = ""
+    cint(uaudOk)
+  except AudioError as error:
+    lastError = error.msg
+    cint(uaudErrFormat)
+  except IOError, OSError:
+    lastError = getCurrentExceptionMsg()
+    cint(uaudErrIo)
+  except Exception:
+    lastError = getCurrentExceptionMsg()
+    cint(uaudErrFormat)
+
+proc uaud_wave_writer_write(writer: pointer; samples: ptr cfloat;
+                            count: clonglong): cint
+                           {.exportc, cdecl, dynlib, raises: [].} =
+  ## Append `count` interleaved values: whole frames only, `channels` each.
+  if writer == nil or (samples == nil and count > 0):
+    lastError = "writer must be non-null, and samples too when count is not 0"
+    return cint(uaudErrArg)
+  if count < 0:
+    lastError = "count must not be negative"
+    return cint(uaudErrArg)
+  try:
+    let handle = cast[WaveWriterHandle](writer)
+    if count == 0:
+      lastError = ""
+      return cint(uaudOk)
+    if count mod handle.channels != 0:
+      lastError = "a block must hold whole frames, not a partial one"
+      return cint(uaudErrArg)
+    let source = cast[ptr UncheckedArray[cfloat]](samples)
+    handle.writer.writeFrames(source.toOpenArray(0, int(count) - 1))
+    lastError = ""
+    cint(uaudOk)
+  except AudioError as error:
+    lastError = error.msg
+    cint(uaudErrFormat)
+  except IOError, OSError:
+    lastError = getCurrentExceptionMsg()
+    cint(uaudErrIo)
+  except Exception:
+    lastError = getCurrentExceptionMsg()
+    cint(uaudErrFormat)
+
+proc uaud_wave_writer_frames(writer: pointer; frames: ptr clonglong): cint
+                            {.exportc, cdecl, dynlib, raises: [].} =
+  ## Frames written so far, per channel.
+  if writer == nil or frames == nil:
+    lastError = "writer and frames must be non-null"
+    return cint(uaudErrArg)
+  try:
+    frames[] = clonglong(cast[WaveWriterHandle](writer).writer.frameCount)
+    lastError = ""
+    cint(uaudOk)
+  except Exception:
+    lastError = getCurrentExceptionMsg()
+    cint(uaudErrFormat)
+
+proc uaud_wave_writer_close(writer: pointer): cint
+                           {.exportc, cdecl, dynlib, raises: [].} =
+  ## Patch the sizes, close the file and release the handle.
+  ##
+  ## The handle is spent: passing it again is undefined, as with a pointer
+  ## already freed. The library cannot check that for you — the memory is gone
+  ## on return — so a caller that may close twice keeps its own flag.
+  if writer == nil:
+    lastError = "writer must be non-null"
+    return cint(uaudErrArg)
+  let handle = cast[WaveWriterHandle](writer)
+  try:
+    handle.writer.close()
+    lastError = ""
+    result = cint(uaudOk)
+  except IOError, OSError:
+    lastError = getCurrentExceptionMsg()
+    result = cint(uaudErrIo)
+  except Exception:
+    lastError = getCurrentExceptionMsg()
+    result = cint(uaudErrFormat)
+  GC_unref(handle)
+
