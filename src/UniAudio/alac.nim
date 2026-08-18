@@ -14,14 +14,17 @@
 ## weights the frame carries.
 ##
 ## The encoder is those stages inverted, in the same order, with the reference
-## encoder's parameters. It reaches the samples through `isobmff`, which builds
-## the MP4 the frames travel in.
+## encoder's parameters. The MP4 the frames travel in is assembled by
+## `UniMovie`, which owns ISOBMFF muxing for the family.
 
 import UniMath/native_float
 import contracts
 import ./pcm
 import ./bitio
 import ./isobmff
+import UniMovie/types
+import UniMovie/mux
+import std/streams
 
 const
   QBSHIFT = 9
@@ -751,10 +754,23 @@ proc writeAlac*(buffer: AudioBuffer; bitsPerSample = 16): string
     putBE(int64((total * 8 * buffer.format.sampleRate) div frames), 4)
     putBE(int64(buffer.format.sampleRate), 4)
 
-    let entry = SampleEntry(format: "alac", channels: channels,
-      bitsPerSample: bitsPerSample, sampleRate: buffer.format.sampleRate,
-      setup: cookie)
-    buildAudioMp4(coded, entry, EncodeFrameLength, frames)
+    # The MP4 is assembled by UniMovie, which owns ISOBMFF muxing for the
+    # family. A StringStream rather than a file: this proc returns the bytes.
+    var sink = newStringStream()
+    var writer = newMp4Writer(sink, [TrackParams(kind: tkAudio, codec: "alac",
+      timescale: buffer.format.sampleRate, channels: channels,
+      sampleRate: buffer.format.sampleRate, configKind: "alac",
+      config: "\0\0\0\0" & cookie)])
+    var written = 0
+    for index, frame in coded:
+      # Every frame holds one full block but the last, which holds the rest.
+      let count = min(EncodeFrameLength, frames - written)
+      var bytes = newSeq[byte](frame.len)
+      for position in 0 ..< frame.len: bytes[position] = byte(frame[position])
+      writer.writeSample(0, bytes, count)
+      written += count
+    writer.close()
+    sink.data
 
 proc writeAlacFile*(path: string; buffer: AudioBuffer;
                     bitsPerSample = 16) {.contractual.} =

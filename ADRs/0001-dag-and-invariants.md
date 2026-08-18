@@ -34,12 +34,17 @@ once and forgotten.
 
 ## The dependency out
 
-`UniMath` is the only external engine this library depends on, for its native
-float façade. Arithmetic is extended there, never rewritten here.
+`UniMath` carries the native float façade. Arithmetic is extended there, never
+rewritten here.
 
-That single edge is deliberate. More would mean a consumer of this library
-pulls in a stack it has no use for, which is the reason audio decoding lives
-in a repository of its own rather than inside a larger one.
+`UniMovie` owns ISOBMFF muxing for the family, and the ALAC writer uses it
+rather than assembling an MP4 a second time here; `UniImage` follows from it,
+because the box writer the muxer builds on lives there.
+
+Each edge is a capability this repository would otherwise duplicate rather
+than a stack it drags in for its own sake. They are not optional, though:
+`alac` imports the muxer at module level and the umbrella re-exports `alac`, so
+a build that only ever decodes still needs all three present.
 
 `NimContracts` is a build-time dependency for the pre- and postconditions,
 which compile away under `-d:release`.
