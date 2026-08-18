@@ -51,9 +51,13 @@ UniAudio is layer 3 of `lituus-lab`'s `Uni*` family: a set of Nim libraries,
 each with a C ABI and a Python binding, unified by a shared dependency DAG and
 documentation and testing conventions. See
 [lituus-lab/.github](https://github.com/lituus-lab/.github) for the family's
-purpose and philosophy. UniAudio depends on UniMath (layer 2) for its native
-float façade, and on nothing else in the family — a single edge, so that an
-application decoding audio does not pull in a stack it has no use for.
+purpose and philosophy. UniAudio depends downward on UniMath (layer 2) for its
+native float façade. It also depends sideways, within layer 3, on UniMovie for
+the ISOBMFF muxing the ALAC writer needs to put its stream in an MP4, and
+through it on UniImage for the box writer those two share. Both sideways edges
+are recorded in `vgraph.cfg`, and neither is optional at build time: `alac`
+imports the muxer at module level and the umbrella re-exports `alac`, so every
+build needs them whether or not a caller ever writes an MP4.
 
 ## Provenance & development
 

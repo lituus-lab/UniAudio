@@ -114,3 +114,27 @@ suite "what the damaged cases turned out to be":
         let at = rand(damaged.high)
         damaged[at] = char(rand(255))
       check survives(damaged)
+
+suite "a box walk never reaches past the buffer":
+  test "a limit past the data yields no span past the data":
+    # A parent span may name more bytes than the file holds — a truncated
+    # download, or a size copied from a header that lied. What is yielded is
+    # read by the caller, so it must never point past what was handed in.
+    var data = ""
+    for shift in countdown(3, 0): data.add char(uint8((64 shr (shift * 8)) and 0xFF))
+    data.add "mdat"
+    data.add "only twelve"
+    for _, _, bodyEnd in boxes(data, 0, 64):
+      check bodyEnd <= data.len
+
+  test "a size no int can hold ends the walk rather than wrapping":
+    var data = ""
+    for shift in countdown(3, 0): data.add char(uint8((1 shr (shift * 8)) and 0xFF))
+    data.add "mdat"
+    for shift in countdown(7, 0):
+      data.add char(uint8((high(int64) shr (shift * 8)) and 0xFF))
+    data.add "payload"
+    var count = 0
+    for _, _, _ in boxes(data, 0, data.len): inc count
+    check count == 0
+
