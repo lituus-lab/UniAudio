@@ -38,4 +38,3 @@ That question is settled before the technical one, and it is settled in this
 record rather than in the code. A consumer who only wanted to read a WAV
 inherits the terms of everything else in the library, so the bar is the same for
 every format.
-

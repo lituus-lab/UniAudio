@@ -74,7 +74,7 @@ below.
 
 ## Layout
 
-```
+```text
 src/UniAudio.nim              umbrella module
 src/UniAudio/pcm.nim          sample buffers, channel and rate conversion
 src/UniAudio/bitio.nim        writing bits, most significant first

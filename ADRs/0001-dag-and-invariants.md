@@ -15,7 +15,7 @@ rather than leaving it to review.
 
 The order, lowest first:
 
-```
+```text
 pcm  fft  riff  aiff  flac  isobmff  alac  ogg  vorbis  mp3_tables  mp3
 tags  decode  fingerprint  c_api
 ```

@@ -8,7 +8,7 @@
 
 ## Layout
 
-```
+```text
 UniAudio.nimble               package + tasks
 config.nims                   arch-conditional build flags
 src/UniAudio.nim              umbrella, re-exports every public submodule
