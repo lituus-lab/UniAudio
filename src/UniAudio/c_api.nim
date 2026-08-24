@@ -28,7 +28,8 @@ proc uaud_last_error(): cstring {.exportc, cdecl, dynlib, raises: [].} =
   ## library; valid until the next failing call on the same thread.
   lastError.cstring
 
-proc uaud_container_name(container: cint): cstring {.exportc, cdecl, dynlib, raises: [].} =
+proc uaud_container_name(container: cint): cstring {.exportc, cdecl, dynlib,
+    raises: [].} =
   ## Name of a container code, or "unknown" for one this build has no name for.
   ## Static; do not free.
   # String literals, not a table built at module scope: this library is
@@ -160,7 +161,8 @@ proc uaud_decode_resampled(path: cstring; targetRate: cint; toMonoFlag: cint;
 
 proc uaud_write_wave(path: cstring; samples: ptr cfloat; sampleRate,
                      channels: cint; frames: clonglong;
-                     bitsPerSample: cint): cint {.exportc, cdecl, dynlib, raises: [].} =
+                     bitsPerSample: cint): cint {.exportc, cdecl, dynlib,
+                         raises: [].} =
   ## Write interleaved floats as a RIFF/WAVE file, 16 or 24 bits.
   if path == nil or samples == nil:
     lastError = "path and samples must be non-null"
@@ -195,7 +197,8 @@ proc uaud_write_wave(path: cstring; samples: ptr cfloat; sampleRate,
 
 proc uaud_write_flac(path: cstring; samples: ptr cfloat; sampleRate,
                      channels: cint; frames: clonglong;
-                     bitsPerSample: cint): cint {.exportc, cdecl, dynlib, raises: [].} =
+                     bitsPerSample: cint): cint {.exportc, cdecl, dynlib,
+                         raises: [].} =
   ## Encode interleaved floats to a native FLAC file, losslessly.
   if path == nil or samples == nil:
     lastError = "path and samples must be non-null"
@@ -227,7 +230,8 @@ proc uaud_write_flac(path: cstring; samples: ptr cfloat; sampleRate,
 
 proc uaud_write_alac(path: cstring; samples: ptr cfloat; sampleRate,
                      channels: cint; frames: clonglong;
-                     bitsPerSample: cint): cint {.exportc, cdecl, dynlib, raises: [].} =
+                     bitsPerSample: cint): cint {.exportc, cdecl, dynlib,
+                         raises: [].} =
   ## Encode interleaved floats to an `.m4a` holding one ALAC track, losslessly.
   if path == nil or samples == nil:
     lastError = "path and samples must be non-null"
@@ -396,7 +400,8 @@ proc uaud_offset_similarity(a: ptr uint32; aCount: cint; b: ptr uint32;
     0.0
 
 proc uaud_wave_probe(path: cstring; sampleRate, channels: ptr cint;
-                     frames: ptr clonglong): cint {.exportc, cdecl, dynlib, raises: [].} =
+                     frames: ptr clonglong): cint {.exportc, cdecl, dynlib,
+                         raises: [].} =
   ## Shape of a RIFF/WAVE file, without keeping the samples.
   ##
   ## Reads the whole file, because a WAV declares its size in a header that
@@ -544,4 +549,5 @@ proc uaud_wave_writer_close(writer: pointer): cint
     lastError = getCurrentExceptionMsg()
     result = cint(uaudErrFormat)
   GC_unref(handle)
+
 
