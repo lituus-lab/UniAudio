@@ -15,15 +15,14 @@
 ##
 ## The encoder is those stages inverted, in the same order, with the reference
 ## encoder's parameters. The MP4 the frames travel in is assembled by
-## `UniMovie`, which owns ISOBMFF muxing for the family.
+## `UniContainer`, which owns container framing for the family.
 
 import UniMath/native_float
 import contracts
 import ./pcm
 import ./bitio
 import ./isobmff
-import UniMovie/types
-import UniMovie/mux
+import UniContainer/mp4
 import std/streams
 
 const
@@ -754,7 +753,7 @@ proc writeAlac*(buffer: AudioBuffer; bitsPerSample = 16): string
     putBE(int64((total * 8 * buffer.format.sampleRate) div frames), 4)
     putBE(int64(buffer.format.sampleRate), 4)
 
-    # The MP4 is assembled by UniMovie, which owns ISOBMFF muxing for the
+    # The MP4 is assembled by UniContainer, which owns container framing for
     # family. A StringStream rather than a file: this proc returns the bytes.
     var sink = newStringStream()
     var writer = newMp4Writer(sink, [TrackParams(kind: tkAudio, codec: "alac",

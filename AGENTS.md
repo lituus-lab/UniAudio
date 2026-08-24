@@ -69,10 +69,10 @@ rule. A format this library does not decode is reported with the codec named,
 never approximated.
 
 `UniMath` carries the `native_float` façade; arithmetic is never rewritten
-here: extend `UniMath`. `UniMovie` supplies ISOBMFF muxing to the ALAC writer,
-and brings `UniImage` with it for the box writer they share. Both are needed
-to build at all: `alac` imports the muxer at module level, and the umbrella
-re-exports `alac`.
+here: extend `UniMath`. `UniContainer` carries container framing, which the
+ALAC writer muxes through: an `.m4a` is an ISO base media file, and how one is
+shaped is not an audio question. Both are needed to build at all — `alac`
+imports the muxer at module level, and the umbrella re-exports `alac`.
 
 ## Verification
 

@@ -13,10 +13,9 @@ requires "nim >= 2.0.0"
 requires "https://github.com/lbartoletti/NimContracts#main"
 # Native float mathematics: one dependency surface for the whole family.
 requires "https://github.com/lituus-lab/UniMath#main"
-# UniMovie is reached by --path in config.nims rather than by `requires`:
-# it is not published, so nimble has no URL to resolve. UniImage follows the
-# same route because nimble never reads UniMovie's own requires when UniMovie
-# arrives by path. Both edges are real and declared in vgraph.cfg.
+# Container framing: the ALAC writer puts its stream in an MP4, which is a
+# job the family does in one place rather than in each library that needs it.
+requires "https://github.com/lituus-lab/UniContainer#main"
 
 task lint, "Fail if nimpretty would reformat a source":
   exec "nim c -r --hints:off -o:build/lint_tool tools/lint.nim"

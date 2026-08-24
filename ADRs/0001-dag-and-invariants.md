@@ -37,14 +37,15 @@ once and forgotten.
 `UniMath` carries the native float façade. Arithmetic is extended there, never
 rewritten here.
 
-`UniMovie` owns ISOBMFF muxing for the family, and the ALAC writer uses it
-rather than assembling an MP4 a second time here; `UniImage` follows from it,
-because the box writer the muxer builds on lives there.
+`UniContainer` carries container framing, and the ALAC writer muxes through it
+rather than assembling an MP4 a second time here — an `.m4a` is an ISO base
+media file, and how one is shaped is not an audio question.
 
-Each edge is a capability this repository would otherwise duplicate rather
-than a stack it drags in for its own sake. They are not optional, though:
-`alac` imports the muxer at module level and the umbrella re-exports `alac`, so
-a build that only ever decodes still needs all three present.
+Both edges point downward, which is the property this repository has to keep:
+each is a capability it would otherwise duplicate, not a stack it drags in for
+its own sake. Neither is optional, though: `alac` imports the muxer at module
+level and the umbrella re-exports `alac`, so a build that only ever decodes
+still links both.
 
 `NimContracts` is a build-time dependency for the pre- and postconditions,
 which compile away under `-d:release`.
