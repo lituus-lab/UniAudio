@@ -90,7 +90,18 @@ int uaud_write_flac(const char *path, const float *samples, int sample_rate,
 int uaud_write_alac(const char *path, const float *samples, int sample_rate,
                     int channels, long long frames, int bits_per_sample);
 
-/* Release a buffer this library allocated. NULL is accepted. */
+/* Release a buffer this library allocated. NULL is accepted.
+ *
+ * Every entry point that allocates through an output pointer — uaud_decode,
+ * uaud_decode_resampled, uaud_tags_json, uaud_fingerprint and
+ * uaud_chroma_fingerprint — clears that pointer to NULL, and its count to
+ * zero, before doing anything that can fail. A caller may therefore free
+ * unconditionally: on any status but UAUD_OK there is nothing to free and the
+ * pointer says so. A NULL output pointer is refused with UAUD_ERR_ARG, never
+ * written through.
+ *
+ * The remaining outputs — a sample rate, a channel count — are written on
+ * success only, and left untouched otherwise. */
 void uaud_free(void *buffer);
 
 /* What the file says about itself, as a UTF-8 JSON object: title, artist,
@@ -113,6 +124,21 @@ int uaud_fingerprint(const char *path, double *duration, unsigned int **words,
  * empty fingerprints are not alike: they are unknown, which reads as 0. */
 double uaud_similarity(const unsigned int *a, int a_count,
                        const unsigned int *b, int b_count);
+
+/* Fingerprint a file the way a lossy re-encode survives. uaud_fingerprint is
+ * exact through a lossless re-encode and drifts to roughly 0.7 through a lossy
+ * one; this holds above 0.98, at the cost of needing about three seconds of
+ * recording before it yields a word. The words are bit-for-bit the ones
+ * Chromaprint produces, so one taken here compares directly with one from
+ * fpcalc; submitting to AcoustID would need Chromaprint's compressed
+ * encoding of them, which this library does not produce.
+ * Allocated by the library and released with uaud_free. */
+int uaud_chroma_fingerprint(const char *path, double *duration,
+                            unsigned int **words, int *count);
+
+/* How alike two chroma fingerprints are, in [0, 1]. */
+double uaud_chroma_similarity(const unsigned int *a, int a_count,
+                              const unsigned int *b, int b_count);
 
 /* The best similarity over a bounded time shift, for two copies of a recording
  * that start at different points. */

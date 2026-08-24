@@ -51,6 +51,10 @@ cdef extern from "UniAudio.h":
                                long long count)
     int uaud_wave_writer_frames(void *writer, long long *frames)
     int uaud_wave_writer_close(void *writer)
+    int uaud_chroma_fingerprint(const char *path, double *duration,
+                                unsigned int **words, int *count)
+    double uaud_chroma_similarity(const unsigned int *a, int a_count,
+                                  const unsigned int *b, int b_count)
 
 
 class UniAudioError(RuntimeError):
@@ -279,6 +283,54 @@ def probe(path):
         raise UniAudioError(status,
                             uaud_last_error().decode("utf-8", "replace"))
     return rate, channels, frames
+
+
+def chroma_fingerprint(path):
+    """Fingerprint a file the way a lossy re-encode survives: (duration, words).
+
+    `fingerprint` is exact through a lossless re-encode and drifts to roughly
+    0.7 through a lossy one; this one holds above 0.98, at the cost of needing
+    about three seconds of recording before it yields a word. The words are the
+    ones Chromaprint produces, bit for bit, so one taken here compares
+    directly with one from `fpcalc`. A recording too short yields an empty
+    list, not an error.
+    """
+    cdef bytes encoded = str(path).encode("utf-8")
+    cdef double duration = 0.0
+    cdef unsigned int *words = NULL
+    cdef int count = 0
+    cdef int status = uaud_chroma_fingerprint(encoded, &duration, &words,
+                                              &count)
+    if status != 0:
+        raise UniAudioError(status,
+                            uaud_last_error().decode("utf-8", "replace"))
+    try:
+        return duration, [words[i] for i in range(count)]
+    finally:
+        uaud_free(words)
+
+
+def chroma_similarity(a, b):
+    """How alike two chroma fingerprints are, in [0, 1]."""
+    cdef list left = [int(w) & 0xFFFFFFFF for w in a]
+    cdef list right = [int(w) & 0xFFFFFFFF for w in b]
+    if not left or not right:
+        return 0.0
+    cdef unsigned int *lbuf = <unsigned int *>malloc(len(left) * sizeof(unsigned int))
+    cdef unsigned int *rbuf = <unsigned int *>malloc(len(right) * sizeof(unsigned int))
+    if lbuf == NULL or rbuf == NULL:
+        free(lbuf); free(rbuf)
+        raise MemoryError()
+    cdef int i
+    try:
+        for i in range(len(left)):
+            lbuf[i] = left[i]
+        for i in range(len(right)):
+            rbuf[i] = right[i]
+        return uaud_chroma_similarity(lbuf, len(left), rbuf, len(right))
+    finally:
+        free(lbuf)
+        free(rbuf)
 
 
 def fingerprint(path):
