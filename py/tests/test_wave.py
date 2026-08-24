@@ -8,7 +8,8 @@ import struct
 
 import pytest
 
-from uniaudio import (UniAudioError, WaveWriter, decode, decode_resampled,
+from uniaudio import (UniAudioError, WaveWriter, chroma_fingerprint,
+                      chroma_similarity, decode, decode_resampled,
                       fingerprint, offset_similarity, probe, similarity, sniff,
                       tags, version, wave_probe, write_alac, write_flac,
                       write_wave)
@@ -308,3 +309,35 @@ def test_an_empty_streamed_file_is_still_a_valid_wave(tmp_path):
     with WaveWriter(path, 8000, 1):
         pass
     assert wave_probe(path) == (8000, 1, 0)
+
+
+def test_chroma_survives_a_lossy_re_encode():
+    """The band-energy fingerprint drifts here; the chroma one is why it exists."""
+    duration, original = chroma_fingerprint(FIXTURES / "sweep.wav")
+    assert original
+    assert duration > 0
+    for encoded in ["sweep-mp3.mp3", "sweep-vorbis.ogg", "sweep-alac.m4a"]:
+        _, copy = chroma_fingerprint(FIXTURES / encoded)
+        assert copy
+        assert chroma_similarity(original, copy) > 0.95
+
+
+def test_chroma_is_identical_to_itself():
+    _, words = chroma_fingerprint(FIXTURES / "sweep.wav")
+    assert chroma_similarity(words, words) > 0.999
+
+
+def test_chroma_of_nothing_is_zero():
+    assert chroma_similarity([], []) == 0.0
+
+
+def test_a_recording_under_three_seconds_yields_no_chroma_words(tmp_path):
+    path = tmp_path / "brief.wav"
+    write_wav(path, frames=8000, rate=8000)
+    _, words = chroma_fingerprint(path)
+    assert words == []
+
+
+def test_chroma_rejects_a_missing_file(tmp_path):
+    with pytest.raises(UniAudioError):
+        chroma_fingerprint(tmp_path / "absent.flac")

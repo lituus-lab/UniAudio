@@ -44,6 +44,7 @@ happened to ask for. Reachable from C, and from Python:
 | write an ALAC | `uaud_write_alac` |
 | tags, whichever scheme the file uses | `uaud_tags_json` |
 | fingerprint, and compare two of them | `uaud_fingerprint`, `uaud_similarity`, `uaud_offset_similarity` |
+| fingerprint that survives a lossy re-encode | `uaud_chroma_fingerprint`, `uaud_chroma_similarity` |
 | release what the library allocated | `uaud_free` |
 
 ## What stays Nim-side

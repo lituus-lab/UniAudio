@@ -49,6 +49,9 @@ proc uaud_sniff(path: cstring; container: ptr cint): cint
   if path == nil or container == nil:
     lastError = "path and container must be non-null"
     return cint(uaudErrArg)
+  if ($path).len == 0:
+    lastError = "path must not be empty"
+    return cint(uaudErrArg)
   try:
     container[] = cint(ord(sniffFile($path)))
     lastError = ""
@@ -66,6 +69,9 @@ proc uaud_probe(path: cstring; sampleRate, channels: ptr cint;
   ## does not decode is named in `uaud_last_error`, not silently skipped.
   if path == nil or sampleRate == nil or channels == nil or frames == nil:
     lastError = "path and every output pointer must be non-null"
+    return cint(uaudErrArg)
+  if ($path).len == 0:
+    lastError = "path must not be empty"
     return cint(uaudErrArg)
   try:
     let buffer = decodeFile($path)
@@ -111,6 +117,13 @@ proc uaud_decode(path: cstring; sampleRate, channels: ptr cint;
       samples == nil:
     lastError = "path and every output pointer must be non-null"
     return cint(uaudErrArg)
+  if ($path).len == 0:
+    lastError = "path must not be empty"
+    return cint(uaudErrArg)
+  # Cleared before anything can fail: a caller that frees unconditionally must
+  # not be handed back whatever its own storage happened to hold.
+  samples[] = nil
+  frames[] = 0
   try:
     result = emitBuffer(decodeFile($path), sampleRate, channels, frames,
       samples)
@@ -139,9 +152,14 @@ proc uaud_decode_resampled(path: cstring; targetRate: cint; toMonoFlag: cint;
       samples == nil:
     lastError = "path and every output pointer must be non-null"
     return cint(uaudErrArg)
+  if ($path).len == 0:
+    lastError = "path must not be empty"
+    return cint(uaudErrArg)
   if targetRate < 0 or targetRate > cint(MaxSampleRate):
     lastError = "target rate out of range"
     return cint(uaudErrArg)
+  samples[] = nil
+  frames[] = 0
   try:
     var buffer = decodeFile($path)
     if toMonoFlag != 0: buffer = buffer.toMono()
@@ -166,6 +184,9 @@ proc uaud_write_wave(path: cstring; samples: ptr cfloat; sampleRate,
   ## Write interleaved floats as a RIFF/WAVE file, 16 or 24 bits.
   if path == nil or samples == nil:
     lastError = "path and samples must be non-null"
+    return cint(uaudErrArg)
+  if ($path).len == 0:
+    lastError = "path must not be empty"
     return cint(uaudErrArg)
   if sampleRate <= 0 or sampleRate > cint(MaxSampleRate) or channels <= 0 or
       channels > cint(MaxChannels) or frames < 0:
@@ -203,6 +224,9 @@ proc uaud_write_flac(path: cstring; samples: ptr cfloat; sampleRate,
   if path == nil or samples == nil:
     lastError = "path and samples must be non-null"
     return cint(uaudErrArg)
+  if ($path).len == 0:
+    lastError = "path must not be empty"
+    return cint(uaudErrArg)
   if sampleRate <= 0 or sampleRate > cint(MaxSampleRate) or channels <= 0 or
       channels > 8 or frames < 0:
     lastError = "sample rate, channel count or frame count out of range"
@@ -235,6 +259,9 @@ proc uaud_write_alac(path: cstring; samples: ptr cfloat; sampleRate,
   ## Encode interleaved floats to an `.m4a` holding one ALAC track, losslessly.
   if path == nil or samples == nil:
     lastError = "path and samples must be non-null"
+    return cint(uaudErrArg)
+  if ($path).len == 0:
+    lastError = "path must not be empty"
     return cint(uaudErrArg)
   if sampleRate <= 0 or sampleRate > cint(MaxSampleRate) or channels <= 0 or
       channels > 2 or frames <= 0:
@@ -274,6 +301,12 @@ proc uaud_fingerprint(path: cstring; duration: ptr cdouble;
   if path == nil or duration == nil or words == nil or count == nil:
     lastError = "path and every output pointer must be non-null"
     return cint(uaudErrArg)
+  if ($path).len == 0:
+    lastError = "path must not be empty"
+    return cint(uaudErrArg)
+  words[] = nil
+  count[] = 0
+  duration[] = 0.0
   try:
     let print = fingerprint(decodeFile($path))
     duration[] = cdouble(print.durationSeconds)
@@ -297,6 +330,68 @@ proc uaud_fingerprint(path: cstring; duration: ptr cdouble;
   except Exception:
     lastError = getCurrentExceptionMsg()
     cint(uaudErrFormat)
+
+proc uaud_chroma_fingerprint(path: cstring; duration: ptr cdouble;
+                             words: ptr ptr uint32; count: ptr cint): cint
+                            {.exportc, cdecl, dynlib, raises: [].} =
+  ## Fingerprint a file the way a lossy re-encode survives.
+  ##
+  ## `uaud_fingerprint` above is exact through a lossless re-encode and drifts
+  ## to roughly 0.7 through a lossy one; this one holds above 0.98, at the cost
+  ## of needing about three seconds of recording before it yields a word. The
+  ## words are bit-for-bit Chromaprint's, so one taken here compares directly
+  ## with one from `fpcalc`.
+  ##
+  ## Allocated here and released with `uaud_free`; a recording too short yields
+  ## a count of zero and a null pointer, not an error.
+  if path == nil or duration == nil or words == nil or count == nil:
+    lastError = "path and every output pointer must be non-null"
+    return cint(uaudErrArg)
+  if ($path).len == 0:
+    lastError = "path must not be empty"
+    return cint(uaudErrArg)
+  words[] = nil
+  count[] = 0
+  duration[] = 0.0
+  try:
+    let print = chromaFingerprint(decodeFile($path))
+    duration[] = cdouble(print.durationSeconds)
+    count[] = cint(print.words.len)
+    if print.words.len == 0:
+      words[] = nil
+    else:
+      let bytes = print.words.len * sizeof(uint32)
+      let buffer = cast[ptr UncheckedArray[uint32]](alloc(bytes))
+      for index in 0 ..< print.words.len:
+        buffer[index] = print.words[index]
+      words[] = cast[ptr uint32](buffer)
+    lastError = ""
+    cint(uaudOk)
+  except AudioError as error:
+    lastError = error.msg
+    cint(uaudErrFormat)
+  except IOError, OSError:
+    lastError = getCurrentExceptionMsg()
+    cint(uaudErrIo)
+  except Exception:
+    lastError = getCurrentExceptionMsg()
+    cint(uaudErrFormat)
+
+proc uaud_chroma_similarity(a: ptr uint32; aCount: cint; b: ptr uint32;
+                            bCount: cint): cdouble
+                           {.exportc, cdecl, dynlib, raises: [].} =
+  ## How alike two chroma fingerprints are, in [0, 1]. Two empty ones are not
+  ## alike: they are unknown, which reads as 0.
+  if a == nil or b == nil or aCount <= 0 or bCount <= 0: return 0.0
+  var left, right: ChromaFingerprint
+  let leftArray = cast[ptr UncheckedArray[uint32]](a)
+  let rightArray = cast[ptr UncheckedArray[uint32]](b)
+  for index in 0 ..< int(aCount): left.words.add leftArray[index]
+  for index in 0 ..< int(bCount): right.words.add rightArray[index]
+  try:
+    cdouble(chromaSimilarity(left, right))
+  except Exception:
+    0.0
 
 func jsonString(text: string): string =
   ## Escaped by hand rather than through std/json: this library is compiled
@@ -330,6 +425,10 @@ proc uaud_tags_json(path: cstring; json: ptr cstring): cint
   if path == nil or json == nil:
     lastError = "path and json must be non-null"
     return cint(uaudErrArg)
+  if ($path).len == 0:
+    lastError = "path must not be empty"
+    return cint(uaudErrArg)
+  json[] = nil
   try:
     let tags = readTagsFile($path)
     var text = "{"

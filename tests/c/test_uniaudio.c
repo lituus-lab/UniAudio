@@ -14,6 +14,64 @@
 #include <math.h>
 #include <string.h>
 
+/* Where the fixtures are depends on where this was launched: `nimble ctest`
+ * runs it from tests/c, the artifact-consumer job from the repository root.
+ * Rather than pick one, look for the directory and skip what needs it when it
+ * is nowhere to be found — a consumer checking the shipped header and library
+ * has no fixtures and should still be able to run this. */
+static char fixtures[512];
+
+static int find_fixtures(void) {
+  static const char *candidates[] = {
+    "../../tests/fixtures/", "tests/fixtures/", "../tests/fixtures/"
+  };
+  const char *given = getenv("UNIAUDIO_FIXTURES");
+  char probe[600];
+  if (given != NULL && given[0] != '\0') {
+    const size_t length = strlen(given);
+    const char *tail = (length > 0 && (given[length - 1] == '/' ||
+                                       given[length - 1] == '\\')) ? "" : "/";
+    snprintf(fixtures, sizeof fixtures, "%s%s", given, tail);
+  } else {
+    for (size_t i = 0; i < sizeof candidates / sizeof candidates[0]; i++) {
+      snprintf(probe, sizeof probe, "%ssweep.wav", candidates[i]);
+      FILE *f = fopen(probe, "rb");
+      if (f != NULL) {
+        fclose(f);
+        snprintf(fixtures, sizeof fixtures, "%s", candidates[i]);
+        return 1;
+      }
+    }
+    return 0;
+  }
+  snprintf(probe, sizeof probe, "%ssweep.wav", fixtures);
+  FILE *f = fopen(probe, "rb");
+  if (f == NULL) return 0;
+  fclose(f);
+  return 1;
+}
+
+/* Join the fixture directory and a name into `out`. */
+static const char *fixture(char *out, size_t size, const char *name) {
+  snprintf(out, size, "%s%s", fixtures, name);
+  return out;
+}
+
+/* A writable directory, whatever the platform calls it. */
+static void temp_dir(char *out, size_t size) {
+  const char *names[] = { "TMPDIR", "TEMP", "TMP" };
+  const char *chosen = NULL;
+  for (size_t i = 0; i < sizeof names / sizeof names[0]; i++) {
+    const char *value = getenv(names[i]);
+    if (value != NULL && value[0] != '\0') { chosen = value; break; }
+  }
+  if (chosen == NULL) chosen = "/tmp";
+  const size_t length = strlen(chosen);
+  const int ends = length > 0 && (chosen[length - 1] == '/' ||
+                                  chosen[length - 1] == '\\');
+  snprintf(out, size, "%s%s", chosen, ends ? "" : "/");
+}
+
 static void put_u32(FILE *f, unsigned long value) {
   for (int i = 0; i < 4; i++) fputc((int)((value >> (8 * i)) & 0xFF), f);
 }
@@ -69,6 +127,10 @@ static void write_id3v1(const char *path, const char *title,
 }
 
 int main(void) {
+  const int have_fixtures = find_fixtures();
+  if (!have_fixtures)
+    printf("note: no fixtures found, skipping what needs a recording\n");
+
   assert(strcmp(uaud_version(), UNIAUDIO_VERSION) == 0);
   assert(UNIAUDIO_VERSION_AT_LEAST(0, 1, 0));
 
@@ -84,9 +146,11 @@ int main(void) {
   const char *missing = "/nonexistent/uniaudio/never.wav";
   assert(uaud_wave_probe(missing, &rate, &channels, &frames) != UAUD_OK);
 
-  const char *tmp = getenv("TMPDIR");
+  char tmpdir[512];
+  temp_dir(tmpdir, sizeof tmpdir);
+  const char *tmp = tmpdir;
   char path[512], other[512];
-  snprintf(path, sizeof path, "%suniaudio_capi.wav", tmp ? tmp : "/tmp/");
+  snprintf(path, sizeof path, "%suniaudio_capi.wav", tmp);
   write_wav(path, 400);
 
   assert(uaud_wave_probe(path, &rate, &channels, &frames) == UAUD_OK);
@@ -96,7 +160,7 @@ int main(void) {
   assert(strlen(uaud_last_error()) == 0); /* success clears the reason */
 
   /* A file that is not a WAV is a format error, not an I/O one. */
-  snprintf(other, sizeof other, "%suniaudio_capi_bad.wav", tmp ? tmp : "/tmp/");
+  snprintf(other, sizeof other, "%suniaudio_capi_bad.wav", tmp);
   FILE *f = fopen(other, "wb");
   assert(f != NULL);
   fwrite("OggS and then some", 1, 18, f);
@@ -145,7 +209,7 @@ int main(void) {
    * bytes at the end of the file, so one can be built here without a fixture:
    * a frame sync so the file reads as MPEG audio, padding, then the tag. */
   char tagged[512];
-  snprintf(tagged, sizeof tagged, "%suniaudio_capi_tags.mp3", tmp ? tmp : "/tmp/");
+  snprintf(tagged, sizeof tagged, "%suniaudio_capi_tags.mp3", tmp);
   write_id3v1(tagged, "probe title", "probe artist", "2001");
 
   char *json = NULL;
@@ -169,7 +233,7 @@ int main(void) {
    * the library's central function and the only check that the bundled
    * allocation and the frame arithmetic agree. */
   char round[512];
-  snprintf(round, sizeof round, "%suniaudio_capi_round.wav", tmp ? tmp : "/tmp/");
+  snprintf(round, sizeof round, "%suniaudio_capi_round.wav", tmp);
   enum { RoundFrames = 800 };
   static float written[RoundFrames * 2];
   for (int i = 0; i < RoundFrames; i++) {
@@ -231,7 +295,7 @@ int main(void) {
     const char *suffix[2] = {"uniaudio_capi_round.flac",
                              "uniaudio_capi_round.m4a"};
     for (int which = 0; which < 2; which++) {
-      snprintf(lossless, sizeof lossless, "%s%s", tmp ? tmp : "/tmp/",
+      snprintf(lossless, sizeof lossless, "%s%s", tmp,
                suffix[which]);
       const int status =
           which == 0
@@ -262,6 +326,95 @@ int main(void) {
   assert(uaud_write_alac(round, written, 8000, 3, RoundFrames, 16) == UAUD_ERR_ARG);
   assert(uaud_write_alac(round, NULL, 8000, 2, RoundFrames, 16) == UAUD_ERR_ARG);
 
+  /* An empty path is refused like a null one: the header says so, and a
+   * caller passing an unset buffer would otherwise reach the filesystem. */
+  {
+    int r = 0, c = 0, n = 0, container = 0;
+    long long f = 0;
+    double d = 0;
+    float *out_samples = NULL;
+    unsigned int *w = NULL;
+    char *j = NULL;
+    void *wr = NULL;
+    assert(uaud_sniff("", &container) == UAUD_ERR_ARG);
+    assert(uaud_probe("", &r, &c, &f) == UAUD_ERR_ARG);
+    assert(uaud_decode("", &r, &c, &f, &out_samples) == UAUD_ERR_ARG);
+    assert(uaud_decode_resampled("", 8000, 0, &r, &c, &f, &out_samples) ==
+           UAUD_ERR_ARG);
+    assert(uaud_tags_json("", &j) == UAUD_ERR_ARG);
+    assert(uaud_fingerprint("", &d, &w, &n) == UAUD_ERR_ARG);
+    assert(uaud_chroma_fingerprint("", &d, &w, &n) == UAUD_ERR_ARG);
+    assert(uaud_wave_probe("", &r, &c, &f) == UAUD_ERR_ARG);
+    assert(uaud_wave_writer_open("", 8000, 1, 16, &wr) == UAUD_ERR_ARG);
+    assert(uaud_write_wave("", written, 8000, 2, RoundFrames, 16) ==
+           UAUD_ERR_ARG);
+    assert(uaud_write_flac("", written, 8000, 2, RoundFrames, 16) ==
+           UAUD_ERR_ARG);
+    assert(uaud_write_alac("", written, 8000, 2, RoundFrames, 16) ==
+           UAUD_ERR_ARG);
+  }
+
+  /* An allocating call that fails must leave a pointer safe to free: a caller
+   * that frees unconditionally would otherwise free whatever its own storage
+   * held. Seeded with a non-NULL value so the assertion means something. */
+  {
+    float *poisoned = (float *)(void *)&rate;
+    unsigned int *poisoned_words = (unsigned int *)(void *)&rate;
+    char *poisoned_json = (char *)(void *)&rate;
+    int rate = 0, channels = 0, count = 7;
+    long long frames = 9;
+    double duration = 3.0;
+
+    assert(uaud_decode(missing, &rate, &channels, &frames, &poisoned) !=
+           UAUD_OK);
+    assert(poisoned == NULL && frames == 0);
+    uaud_free(poisoned); /* safe precisely because it is NULL */
+
+    assert(uaud_fingerprint(missing, &duration, &poisoned_words, &count) !=
+           UAUD_OK);
+    assert(poisoned_words == NULL && count == 0);
+    uaud_free(poisoned_words);
+
+    poisoned_words = (unsigned int *)(void *)&rate;
+    count = 7;
+    assert(uaud_chroma_fingerprint(missing, &duration, &poisoned_words,
+                                   &count) != UAUD_OK);
+    assert(poisoned_words == NULL && count == 0);
+    uaud_free(poisoned_words);
+
+    assert(uaud_tags_json(missing, &poisoned_json) != UAUD_OK);
+    assert(poisoned_json == NULL);
+    uaud_free(poisoned_json);
+  }
+
+  /* The chroma fingerprint is what survives a lossy re-encode: the same
+   * recording through Vorbis must still read as the same recording, where the
+   * band-energy one above drifts well below any strict threshold. */
+  {
+    double d_wav = 0, d_ogg = 0;
+    unsigned int *w_wav = NULL, *w_ogg = NULL;
+    int c_wav = 0, c_ogg = 0;
+    char one[600], two[600];
+
+    /* Argument handling holds with or without a recording to fingerprint. */
+    assert(uaud_chroma_similarity(NULL, 0, NULL, 0) == 0.0);
+    assert(uaud_chroma_fingerprint(NULL, &d_wav, &w_wav, &c_wav) ==
+           UAUD_ERR_ARG);
+
+    if (have_fixtures) {
+      assert(uaud_chroma_fingerprint(fixture(one, sizeof one, "sweep.wav"),
+                                     &d_wav, &w_wav, &c_wav) == UAUD_OK);
+      assert(uaud_chroma_fingerprint(fixture(two, sizeof two,
+                                             "sweep-vorbis.ogg"),
+                                     &d_ogg, &w_ogg, &c_ogg) == UAUD_OK);
+      assert(c_wav > 0 && c_ogg > 0);
+      assert(uaud_chroma_similarity(w_wav, c_wav, w_ogg, c_ogg) > 0.95);
+      assert(uaud_chroma_similarity(w_wav, c_wav, w_wav, c_wav) > 0.999);
+      uaud_free(w_wav);
+      uaud_free(w_ogg);
+    }
+  }
+
   /* A shifted copy of a fingerprint still matches, which a plain comparison
    * would miss. */
   {
@@ -280,7 +433,7 @@ int main(void) {
   {
     char streamed[512];
     snprintf(streamed, sizeof streamed, "%suniaudio_capi_stream.wav",
-             tmp ? tmp : "/tmp/");
+             tmp);
     void *writer = NULL;
     long long counted = -1;
     assert(uaud_wave_writer_open(streamed, 8000, 2, 16, &writer) == UAUD_OK);
