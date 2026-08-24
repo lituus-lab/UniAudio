@@ -1,0 +1,68 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 lituus-lab
+# Local mirrors of the CI gates. `pre-commit install` sets up pre-commit,
+# pre-push and commit-msg hooks in one go (default_install_hook_types).
+default_install_hook_types: [pre-commit, pre-push, commit-msg]
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      # Sources under src/ end on two deliberate blank lines, without which
+      # `nimble coverage` fails; see AGENTS.md. Exclude *.nim so this hook does
+      # not undo them.
+      - id: end-of-file-fixer
+        exclude: \.nim$
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: check-case-conflict
+
+  - repo: https://github.com/igorshubovych/markdownlint-cli
+    rev: v0.49.1
+    hooks:
+      # Rules in .markdownlint.yaml: MD040 (a fence needs a language) is the
+      # one that catches real drift; table style and wrapped columns are off.
+      - id: markdownlint
+        # The pull-request template is a fragment GitHub pastes into a PR body,
+        # not a document: it has no H1 and its checklist lines do not wrap.
+        exclude: ^\.github/pull_request_template\.md$
+
+  - repo: https://github.com/commitizen-tools/commitizen
+    rev: v4.16.5
+    hooks:
+      # cz check --commit-msg-file, runs at commit-msg time. .cz.toml pins the
+      # spec/types so local matches the commitizen CI action.
+      - id: commitizen
+
+  - repo: local
+    hooks:
+      - id: nim-lint
+        name: nimble lint (nimpretty)
+        entry: nimble lint
+        language: system
+        files: \.nim$
+        pass_filenames: false
+      - id: nim-vgraph
+        name: nimble checkVGraph
+        entry: nimble checkVGraph
+        language: system
+        files: \.nim$
+        pass_filenames: false
+        stages: [pre-push]
+      - id: spdx
+        name: SPDX headers (nim/C/Python)
+        entry: tools/hooks/spdx_check.sh
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: dco
+        name: DCO sign-off
+        entry: tools/hooks/dco_check.sh
+        language: system
+        stages: [commit-msg]
+        always_run: true

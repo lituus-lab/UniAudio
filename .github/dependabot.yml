@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 lituus-lab
+version: 2
+# Nimble is not a Dependabot ecosystem; .nimble dependencies are bumped by hand.
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+
+  - package-ecosystem: pip
+    directory: /py
+    schedule:
+      interval: monthly

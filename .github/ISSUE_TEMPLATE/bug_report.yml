@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 lituus-lab
+name: Bug report
+description: Something behaves differently from what it documents
+labels: [bug]
+body:
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Surface
+      description: Where the behaviour was observed.
+      options: [Nim, C ABI, Python, Build/CI]
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected, and observed
+      description: What should have happened, and what did.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: Smallest input that shows it, plus the exact command.
+      render: shell
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Nim version, and package version.
+      placeholder: macOS 15 / Nim 2.2.10 / UniAudio 0.1.0
+    validations:
+      required: true

@@ -1,0 +1,205 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 lituus-lab
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+# Read-only by default: only the release upload needs write, and it
+# declares it itself.
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    name: Tag matches .nimble version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with: { persist-credentials: false }
+      # A tag disagreeing with the package version ships artifacts whose
+      # embedded version lies. Refuse before anything is built.
+      - run: |
+          set -eu
+          tag="${GITHUB_REF_NAME#v}"
+          declared=$(grep -m1 '^version' UniAudio.nimble | cut -d'"' -f2)
+          declared_py=$(grep -m1 '^version = ' py/pyproject.toml | cut -d'"' -f2)
+          # Prefix-agnostic on purpose: the macro is UNIMATH_VERSION in one repo
+          # and UC_VERSION in another.
+          declared_h=$(grep -m1 -E '^#define [A-Z_]+_VERSION "' include/UniAudio.h | cut -d'"' -f2)
+          echo "tag=$tag nimble=$declared python=$declared_py header=$declared_h"
+          test "$tag" = "$declared"
+          test "$tag" = "$declared_py"
+          test "$tag" = "$declared_h"
+
+  test:
+    name: Nim tests (${{ matrix.os }})
+    needs: guard
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+        with: { persist-credentials: false }
+      - uses: jiro4989/setup-nim-action@v2
+        with:
+          nim-version: '2.2.10'
+      - run: nimble install -y
+      - run: nimble testCi
+      - run: nimble testCiRelease
+
+  cabi:
+    name: C ABI (${{ matrix.os }})
+    needs: guard
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+        with: { persist-credentials: false }
+      - uses: jiro4989/setup-nim-action@v2
+        with:
+          nim-version: '2.2.10'
+      - run: nimble install -y
+      # gcc arrives with Nim's MinGW, GNU make does not ship on the runner image.
+      - name: Install GNU make (Windows)
+        if: runner.os == 'Windows'
+        run: choco install make --no-progress -y
+      # Test the ABI before packaging it: a release that ships a lib failing
+      # its own header test is worse than no release.
+      - run: nimble ctest
+      - run: nimble clibStatic
+      - run: nimble clib
+      - name: Package
+        shell: bash
+        run: |
+          set -eu
+          dir="UniAudio-${GITHUB_REF_NAME}-${{ matrix.os }}"
+          mkdir -p "$dir/include"
+          cp include/UniAudio.h "$dir/include/"
+          cp libUniAudio.* "$dir/"
+          cp LICENSE NOTICE "$dir/"
+          tar czf "$dir.tar.gz" "$dir"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cabi-${{ matrix.os }}
+          path: '*.tar.gz'
+
+  wheels:
+    name: Wheel (${{ matrix.os }}, py${{ matrix.python-version }})
+    needs: guard
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        # No Py_LIMITED_API/abi3 in setup.py: the extension is tied to each
+        # CPython minor version's C ABI, so every one needs its own wheel.
+        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
+    steps:
+      - uses: actions/checkout@v7
+        with: { persist-credentials: false }
+      - uses: jiro4989/setup-nim-action@v2
+        with:
+          nim-version: '2.2.10'
+      - run: nimble install -y
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install -U setuptools wheel Cython pytest
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+      - run: nimble pyLib
+      # Build the extension in-place and run the test suite before packaging a
+      # wheel -- a release wheel that fails its own tests is worse than no wheel.
+      - run: cd py && python setup.py build_ext --inplace
+      - run: cd py && python -m pytest -q
+      - run: cd py && python setup.py bdist_wheel
+      - name: Repair Wheel
+        shell: bash
+        run: |
+          set -eu
+          case "$RUNNER_OS" in
+            Linux)   pip install auditwheel && LD_LIBRARY_PATH="$GITHUB_WORKSPACE" auditwheel repair py/dist/*.whl -w dist/ ;;
+            macOS)   pip install delocate   && DYLD_LIBRARY_PATH="$GITHUB_WORKSPACE" delocate-wheel py/dist/*.whl -w dist/ ;;
+            Windows) pip install delvewheel && delvewheel repair py/dist/*.whl -w dist/ ;;
+          esac
+      - uses: actions/upload-artifact@v7
+        with:
+          name: wheel-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: dist/*.whl
+
+  sdist:
+    name: Source distribution
+    needs: guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with: { persist-credentials: false }
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: pip install -U setuptools wheel Cython
+      # Vendors the Nim source into py/_nimsrc/ (setup.py's vendor_nim_source),
+      # so `pip install --no-binary` can build it on a platform/Python version
+      # with no prebuilt wheel -- nimble/nim must be on the installer's PATH.
+      - run: cd py && python setup.py sdist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: sdist
+          path: py/dist/*.tar.gz
+
+  publish:
+    name: Publish GitHub Release
+    needs: [test, cabi, wheels, sdist]
+    runs-on: ubuntu-latest
+    permissions:
+      # softprops/action-gh-release creates the release and uploads assets.
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+      - run: ls -R artifacts
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: [test, wheels, sdist]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/uniaudio/
+    permissions:
+      # Trusted publishing (OIDC): no API token stored here. Requires a
+      # one-time manual step on pypi.org -- add lituus-lab/UniAudio,
+      # workflow release.yml, environment pypi as a trusted publisher for
+      # the uniaudio project.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: wheel-*
+          path: dist
+          merge-multiple: true
+      - uses: actions/download-artifact@v8
+        with:
+          name: sdist
+          path: dist
+      - run: ls dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          # This tag can re-run after a version already has some files on
+          # PyPI (e.g. adding a Python version or the sdist later) -- PyPI
+          # rejects re-uploading an unchanged filename, so skip rather than
+          # fail the whole job on files already published.
+          skip-existing: true

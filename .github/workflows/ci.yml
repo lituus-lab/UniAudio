@@ -1,0 +1,357 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 lituus-lab
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Read-only by default; the one job that needs more declares it itself.
+permissions:
+  contents: read
+
+# A newer push makes the previous run's answer irrelevant: cancel it rather
+# than pay for both.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dco:
+    name: DCO sign-off
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v7
+        with: { fetch-depth: 0, persist-credentials: false }
+      - name: Every commit must carry a Signed-off-by trailer
+        run: |
+          set -e
+          range="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+          bad=0
+          for c in $(git rev-list --no-merges "$range"); do
+            # Parse the trailer block first, as tools/hooks/dco_check.sh does:
+            # a bare grep also accepts a Signed-off-by quoted in the body.
+            if ! git log -1 --format='%B' "$c" | git interpret-trailers --parse |
+                 grep -qE '^Signed-off-by: .+ <.+@.+>'; then
+              echo "Missing Signed-off-by on commit $c"
+              git log -1 --oneline "$c"
+              bad=1
+            fi
+          done
+          exit $bad
+
+  spdx:
+    name: SPDX headers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with: { persist-credentials: false }
+      # Mirrors tools/hooks/spdx_check.sh: every tracked Nim/C/Python source must
+      # carry an SPDX-License-Identifier header in its first 5 lines.
+      - name: Every Nim/C/Python source carries an SPDX header
+        run: bash tools/hooks/spdx_check.sh
+
+  test:
+    name: Nim (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+        with: { persist-credentials: false }
+      - uses: jiro4989/setup-nim-action@v2
+        with:
+          nim-version: '2.2.10'
+      - run: nimble install -y
+      - run: nimble testCi
+      - run: nimble testCiRelease
+      # The example demos are part of the documented surface but no test
+      # pulled them in; build and run them so a broken example fails CI.
+      - run: nimble example
+
+  cabi:
+    name: C ABI (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+        with: { persist-credentials: false }
+      - uses: jiro4989/setup-nim-action@v2
+        with:
+          nim-version: '2.2.10'
+      - run: nimble install -y
+      # gcc arrives with Nim's MinGW, GNU make does not ship on the runner image.
+      - name: Install GNU make (Windows)
+        if: runner.os == 'Windows'
+        run: choco install make --no-progress -y
+      - run: nimble ctest
+      # The C demo is part of the documented surface; nothing else builds it.
+      - run: nimble cexample
+      # nimble ctest only builds the static lib (clibStatic); the shared lib
+      # this job uploads below needs its own explicit build step.
+      - run: nimble clib
+      - name: Upload Library
+        uses: actions/upload-artifact@v7
+        with:
+          name: libUniAudio-${{ matrix.os }}
+          # The header ships with the lib: a C ABI artifact without it is not
+          # consumable. Paths stay repo-relative so the zip keeps include/ intact.
+          path: |
+            include/UniAudio.h
+            libUniAudio.so
+            libUniAudio.dll
+            libUniAudio.dylib
+            libUniAudio.a
+            libUniAudio.lib
+  python:
+    name: Python (${{ matrix.os }}, py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        # Every version release.yml ships a wheel for: without Py_LIMITED_API
+        # each CPython minor has its own C ABI, so each needs its own run.
+        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
+    steps:
+      - uses: actions/checkout@v7
+        with: { persist-credentials: false }
+      - uses: jiro4989/setup-nim-action@v2
+        with:
+          nim-version: '2.2.10'
+      - run: nimble install -y
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install -U setuptools wheel Cython pytest
+      # CPython is MSVC-built here, so the lib it links must be too: put cl.exe on
+      # PATH for `nimble pyLib`, which routes to clibMsvc on Windows.
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+      - run: nimble pyLib
+      # `python3` isn't guaranteed on a Windows runner (actions/setup-python
+      # only puts `python.exe` on PATH there); this job's matrix spans
+      # windows-latest.
+      - run: cd py && python setup.py build_ext --inplace
+      - run: cd py && python -m pytest -q
+      - run: cd py && python setup.py bdist_wheel
+      - name: Repair Wheel (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          pip install auditwheel
+          auditwheel repair py/dist/*.whl -w py/dist/repaired/
+      - name: Repair Wheel (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          pip install delocate
+          delocate-wheel py/dist/*.whl -w py/dist/repaired/
+      - name: Repair Wheel (Windows)
+        if: matrix.os == 'windows-latest'
+        # bash, not the default PowerShell: pwsh does not expand
+        # py/dist/*.whl, so delvewheel would receive the pattern itself.
+        shell: bash
+        run: |
+          pip install delvewheel
+          delvewheel repair py/dist/*.whl -w py/dist/repaired/
+      - name: Upload Python Wheel
+        uses: actions/upload-artifact@v7
+        with:
+          name: uniaudio-wheel-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: py/dist/repaired/*.whl
+
+  consume-cabi:
+    name: Consume C artifact (${{ matrix.os }})
+    needs: cabi
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      # No setup-nim-action on purpose: proves the published header and lib work
+      # on a machine without Nim, using only the test source from the checkout.
+      - uses: actions/checkout@v7
+        with: { persist-credentials: false }
+      - uses: actions/download-artifact@v8
+        with:
+          name: libUniAudio-${{ matrix.os }}
+          path: artifact
+      - name: Compile and run a consumer against the artifact
+        shell: bash
+        run: |
+          set -eu
+          # Assert the shipped layout first: a missing piece names itself here,
+          # rather than surfacing as an obscure compiler error.
+          test -f artifact/include/UniAudio.h
+          test -f artifact/libUniAudio.a
+          CC=cc; BIN=consumer
+          if [ "$RUNNER_OS" = Windows ]; then CC=gcc; BIN=consumer.exe; fi
+          "$CC" -Iartifact/include -O2 -Wall -Wextra -std=c11 -o "$BIN" \
+            tests/c/test_uniaudio.c artifact/libUniAudio.a
+          "./$BIN"
+
+  consume-wheel:
+    name: Consume wheel (${{ matrix.os }}, py${{ matrix.python-version }})
+    needs: python
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        # Mirrors the python job: a wheel only installs on the CPython minor
+        # it was built for, so each one is consumed where it was produced.
+        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
+    steps:
+      # Neither Nim nor libUniAudio exists here: whatever the extension needs
+      # at runtime must have travelled inside the wheel.
+      - uses: actions/checkout@v7
+        with: { persist-credentials: false }
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: uniaudio-wheel-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: dist
+      - name: Install the wheel and exercise the installed package
+        shell: bash
+        run: |
+          set -eu
+          python -m pip install -U pip
+          # --only-binary rules out a silent fallback to building from source.
+          python -m pip install --only-binary :all: dist/*.whl
+          # Run outside the checkout so `import uniaudio` can only resolve to
+          # the installed wheel, never to py/uniaudio next door. The fixtures
+          # travel because decoding one is what proves the bundled library
+          # came along too; importing the module alone would not.
+          work="$RUNNER_TEMP/wheel-check"
+          mkdir -p "$work/tests"
+          cp -r tests/fixtures "$work/tests/"
+          cp py/tests/smoke_installed.py "$work/"
+          cd "$work"
+          python smoke_installed.py
+      - name: Execute the quickstart notebook against the installed wheel
+        shell: bash
+        run: |
+          set -eu
+          python -m pip install nbconvert ipykernel
+          # Same neutral directory, same reason. The notebook locates the
+          # fixtures relative to itself, so it is placed where it sits in the
+          # source tree. GitHub renders the committed outputs, so executing it
+          # here keeps them honest.
+          work="$RUNNER_TEMP/wheel-check"
+          mkdir -p "$work/py/notebooks"
+          cp py/notebooks/quickstart.ipynb "$work/py/notebooks/"
+          cd "$work/py/notebooks"
+          jupyter nbconvert --execute --to notebook --stdout quickstart.ipynb > /dev/null
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with: { persist-credentials: false }
+      - uses: jiro4989/setup-nim-action@v2
+        with:
+          nim-version: '2.2.10'
+      # checkVGraph compiles tools/vgraph.nim, which imports contracts (its
+      # layerOf/layerOfModule postconditions) -- needs deps resolved first.
+      - run: nimble install -y
+      - run: nimble lint
+      - run: nimble checkVGraph
+
+  docs:
+    name: Docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with: { persist-credentials: false }
+      - uses: jiro4989/setup-nim-action@v2
+        with:
+          nim-version: '2.2.10'
+      - run: nimble install -y
+      - run: nimble docsDeps
+      # nimib runs the book's code against this build: a stale book fails here.
+      - run: nimble docs
+      - name: Upload Docs
+        uses: actions/upload-artifact@v7
+        with:
+          name: docs
+          path: pages/
+
+  pages:
+    name: Publish Pages
+    needs: docs
+    # Pages serves private repos only on a paid plan, and UniAudio is private.
+    # Skipped here; switches itself on in the public engines cloned from it.
+    if: ${{ !github.event.repository.private && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    permissions:
+      # A job-level block replaces the workflow default outright, so the
+      # checkout/artifact read has to be restated alongside the Pages grants.
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: docs
+          path: pages
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: pages
+      - id: deploy
+        uses: actions/deploy-pages@v5
+
+  coverage:
+    name: Coverage
+    # Linux only: Apple's gcov is a clang stub emitting no .gcda, so the report
+    # would come out empty on macOS. No lcov version pin needed — the task
+    # suppresses no error, so 1.x and 2.x agree.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with: { persist-credentials: false }
+      - uses: jiro4989/setup-nim-action@v2
+        with:
+          nim-version: '2.2.10'
+      - run: sudo apt-get update && sudo apt-get install -y lcov
+      - run: nimble install -y
+      - run: nimble coverage
+      - name: Upload Coverage Report
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-html
+          path: |
+            coverage/
+            lcov.info
+
+  bench:
+    name: Bench smoke (${{ matrix.os }})
+    # Proves the harness still builds and runs. The numbers a shared runner
+    # produces are not comparable between runs, so none are recorded here;
+    # bench/README.md carries the ones measured on known hardware.
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+        with: { persist-credentials: false }
+      - uses: jiro4989/setup-nim-action@v2
+        with:
+          nim-version: '2.2.10'
+      - run: nimble install -y
+      - run: nimble bench

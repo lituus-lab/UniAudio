@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 lituus-lab
+# Reviewer assigned automatically on every pull request.
+* @lbartoletti
+
+# The C ABI is a compatibility contract: header and implementation move together.
+/include/                  @lbartoletti
+/src/UniAudio/c_api.nim    @lbartoletti

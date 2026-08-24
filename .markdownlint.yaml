@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 lituus-lab
+# Rules for `markdownlint` (pre-commit). Defaults apply except below.
+
+# Prose is written at 80 columns by hand; the gate sits at 100 so that a line
+# an inline code span or a URL pushed past 80 is not a build failure, while a
+# genuinely runaway line still is. Tables and fenced blocks carry paths,
+# commands and reference values that cannot wrap at all.
+MD013:
+  line_length: 100
+  tables: false
+  code_blocks: false
+
+# The family writes compact separator rows (|---|---|). Restyling every table
+# to "| --- |" would churn every repo for no reader-visible gain.
+MD060: false
