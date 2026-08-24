@@ -56,8 +56,8 @@ LICENSE NOTICE CONTRIBUTING.md SECURITY.md .gitignore README.md AGENTS.md CLAUDE
   checkVGraph`: a module may import its own layer and any lower one, never a
   higher one. `pcm` is the bottom, `c_api` the top.
 - `UniMath` carries the native float façade; arithmetic is extended there,
-  never rewritten here. `UniMovie` supplies ISOBMFF muxing for the ALAC
-  writer, and brings `UniImage` with it for the box writer they share.
+  never rewritten here. `UniContainer` carries container framing, which is
+  what the ALAC writer muxes its stream through.
 - A format that is recognised but not decoded is named in the error, never
   approximated. Which codecs are implemented is ADR-0002's subject.
 - A decoder is checked against the reference encoder or an independent

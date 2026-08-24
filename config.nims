@@ -10,11 +10,3 @@
 when withDir(thisDir(), system.fileExists("nimble.paths")):
   include "nimble.paths"
 # end Nimble config
-
-# The ALAC writer muxes through UniMovie, which reaches UniImage for the box
-# writer they share. UniMovie is not published, so it is found beside this repo
-# in the lituus-lab checkout; UniImage follows the same route because nimble
-# never reads UniMovie's own requires when UniMovie arrives by path. A clone
-# on its own cannot build the ALAC writer until UniMovie is published.
-switch("path", "../UniMovie/src")
-switch("path", "../UniImage/src")
