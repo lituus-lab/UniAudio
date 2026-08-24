@@ -51,6 +51,7 @@ task test, "Nim tests (debug, contracts active)":
   exec "nim c -r --path:src -o:build/test_tags tests/test_tags.nim"
   exec "nim c -r --path:src -o:build/test_robustness tests/test_robustness.nim"
   exec "nim c -r --path:src -o:build/test_fingerprint tests/test_fingerprint.nim"
+  exec "nim c -r --path:src -o:build/test_chroma tests/test_chroma.nim"
 
 task testRelease, "Nim tests (release, contracts compiled away)":
   exec "nim c -r -d:release --path:src -o:build/test_bitio_rel tests/test_bitio.nim"
@@ -65,6 +66,7 @@ task testRelease, "Nim tests (release, contracts compiled away)":
   exec "nim c -r -d:release --path:src -o:build/test_tags_rel tests/test_tags.nim"
   exec "nim c -r -d:release --path:src -o:build/test_robustness_rel tests/test_robustness.nim"
   exec "nim c -r -d:release --path:src -o:build/test_fingerprint_rel tests/test_fingerprint.nim"
+  exec "nim c -r -d:release --path:src -o:build/test_chroma_rel tests/test_chroma.nim"
 
 task testCi, "Nim tests (CI subset, debug)":
   exec "nim c -r --path:src -o:build/test_pcm tests/test_pcm.nim"
@@ -77,6 +79,7 @@ task testCi, "Nim tests (CI subset, debug)":
   exec "nim c -r --path:src -o:build/test_tags tests/test_tags.nim"
   exec "nim c -r --path:src -o:build/test_robustness tests/test_robustness.nim"
   exec "nim c -r --path:src -o:build/test_fingerprint tests/test_fingerprint.nim"
+  exec "nim c -r --path:src -o:build/test_chroma tests/test_chroma.nim"
 
 task testCiRelease, "Nim tests (CI subset, release)":
   exec "nim c -r -d:release --path:src -o:build/test_pcm_rel tests/test_pcm.nim"
@@ -89,6 +92,7 @@ task testCiRelease, "Nim tests (CI subset, release)":
   exec "nim c -r -d:release --path:src -o:build/test_tags_rel tests/test_tags.nim"
   exec "nim c -r -d:release --path:src -o:build/test_robustness_rel tests/test_robustness.nim"
   exec "nim c -r -d:release --path:src -o:build/test_fingerprint_rel tests/test_fingerprint.nim"
+  exec "nim c -r -d:release --path:src -o:build/test_chroma_rel tests/test_chroma.nim"
 
 task testAll, "debug + release + C ABI":
   exec "nimble test"

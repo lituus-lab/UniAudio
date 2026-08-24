@@ -230,6 +230,52 @@ nbCode:
   echo "wav against vorbis: ", similarity(fromWave, fromVorbis)
 
 nbText: """
+## Two fingerprints, and which one to reach for
+
+The one above is Haitsma and Kalker's: 32 band-energy differences per frame,
+one bit each. It is exact through a lossless re-encode — the numbers you just
+saw — and it drifts through a lossy one, because the sign of a small difference
+is what a codec is free to move. That is not a defect. The published match
+criterion for it is a bit error rate under 0.35, which is a similarity around
+0.65, and the numbers above sit right in that range.
+
+That is fine for asking *is this the same file's audio*, and wrong for asking
+*is this the same recording, whatever it was encoded with*, at a strict
+threshold. For the second question there is `chromaFingerprint`: twelve pitch
+classes per frame instead of band differences, smoothed across time, normalised
+per frame, then read by sixteen filters over rectangles of the chromagram. A
+codec that moves energy inside a pitch class leaves those filters where they
+were.
+
+Same two files, both algorithms:
+"""
+
+nbCode:
+  let chromaWave = chromaFingerprint(decodeFile(Fixtures / "sweep.wav"))
+  let chromaMp3 = chromaFingerprint(decodeFile(Fixtures / "sweep-mp3.mp3"))
+  let chromaVorbis = chromaFingerprint(decodeFile(Fixtures /
+      "sweep-vorbis.ogg"))
+  echo "band energy, wav against mp3:    ", similarity(fromWave, fromMp3)
+  echo "chroma,      wav against mp3:    ", chromaSimilarity(chromaWave, chromaMp3)
+  echo "band energy, wav against vorbis: ", similarity(fromWave, fromVorbis)
+  echo "chroma,      wav against vorbis: ", chromaSimilarity(chromaWave, chromaVorbis)
+
+nbText: """
+The chroma fingerprint pays for that in two ways. It needs about three seconds
+of recording before it produces a single word, where the band-energy one starts
+after two frames — so a short jingle fingerprints with one and not the other.
+And it is twelve pitch classes wide, so it describes *what notes are sounding*
+rather than the full spectral shape: two different recordings in the same key
+sit closer together than they do under band energies.
+
+Which to reach for, then: `fingerprint` when the question is whether two files
+hold the same decoded audio, and cheaply; `chromaFingerprint` when a copy may
+have been re-encoded and the answer still has to be yes. The chroma words are
+bit-for-bit the ones Chromaprint produces, so a fingerprint taken here and one
+taken by `fpcalc` compare directly. Submitting one to AcoustID would need
+Chromaprint's compressed encoding of those words, which this library does not
+produce.
+
 ## When a file cannot be decoded
 
 MP4 and Ogg are containers, and each carries more codecs than this library
