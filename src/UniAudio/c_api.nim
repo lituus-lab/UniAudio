@@ -19,19 +19,63 @@ type Status = enum
 
 var lastError {.threadvar.}: string
 
+
+# A shared library runs NimMain from DllMain (Windows) or an ELF constructor;
+# a static one has neither, so nothing initializes the Nim runtime. The first
+# entry point then enters Nim code whose globals were never set up and the
+# process faults. The static-library tasks pass -d:staticNoAutoInit; shared
+# builds must not, or NimMain runs twice.
+when defined(staticNoAutoInit):
+  # A once primitive, not a plain flag: two threads reaching an entry point
+  # together would both see the flag unset, both call NimMain, and the second
+  # would enter Nim code the first had not finished initializing. The platform
+  # primitives block the losers until the winner returns, which a flag cannot.
+  #
+  # C statics, not Nim globals: module initialization would reset a Nim one and
+  # NimMain would run again. NimMain is declared here too — the generated
+  # prototype comes after this section.
+  {.emit: """/*VARSECTION*/
+void NimMain(void);
+#ifdef _WIN32
+#  include <windows.h>
+static INIT_ONCE uaud_runtime_once = INIT_ONCE_STATIC_INIT;
+static BOOL CALLBACK uaud_runtime_init(PINIT_ONCE o, PVOID p, PVOID *c) {
+  (void)o; (void)p; (void)c; NimMain(); return TRUE;
+}
+static void uaud_runtime_ensure(void) {
+  InitOnceExecuteOnce(&uaud_runtime_once, uaud_runtime_init, NULL, NULL);
+}
+#else
+#  include <pthread.h>
+static pthread_once_t uaud_runtime_once = PTHREAD_ONCE_INIT;
+static void uaud_runtime_init(void) { NimMain(); }
+static void uaud_runtime_ensure(void) {
+  pthread_once(&uaud_runtime_once, uaud_runtime_init);
+}
+#endif
+""".}
+  template ensureRuntime() =
+    {.emit: "  uaud_runtime_ensure();".}
+else:
+  template ensureRuntime() = discard
+
+
 proc uaud_version(): cstring {.exportc, cdecl, dynlib, raises: [].} =
   ## Static version string; do not free.
+  ensureRuntime()
   UniAudioVersionC
 
 proc uaud_last_error(): cstring {.exportc, cdecl, dynlib, raises: [].} =
   ## Most recent failure on this thread, "" when there is none. Owned by the
   ## library; valid until the next failing call on the same thread.
+  ensureRuntime()
   lastError.cstring
 
 proc uaud_container_name(container: cint): cstring {.exportc, cdecl, dynlib,
     raises: [].} =
   ## Name of a container code, or "unknown" for one this build has no name for.
   ## Static; do not free.
+  ensureRuntime()
   # String literals, not a table built at module scope: this library is
   # compiled --noMain, so no global initialiser ever runs.
   case container
@@ -46,6 +90,7 @@ proc uaud_container_name(container: cint): cstring {.exportc, cdecl, dynlib,
 proc uaud_sniff(path: cstring; container: ptr cint): cint
                {.exportc, cdecl, dynlib, raises: [].} =
   ## Identify a file from its leading bytes, without decoding it.
+  ensureRuntime()
   if path == nil or container == nil:
     lastError = "path and container must be non-null"
     return cint(uaudErrArg)
@@ -67,6 +112,7 @@ proc uaud_probe(path: cstring; sampleRate, channels: ptr cint;
                 frames: ptr clonglong): cint {.exportc, cdecl, dynlib, raises: [].} =
   ## Shape of any container this build decodes. A container it recognises but
   ## does not decode is named in `uaud_last_error`, not silently skipped.
+  ensureRuntime()
   if path == nil or sampleRate == nil or channels == nil or frames == nil:
     lastError = "path and every output pointer must be non-null"
     return cint(uaudErrArg)
@@ -113,6 +159,7 @@ proc uaud_decode(path: cstring; sampleRate, channels: ptr cint;
                 {.exportc, cdecl, dynlib, raises: [].} =
   ## Decode a file to interleaved floats in [-1, 1]. `frames` counts per
   ## channel, so the block holds `frames * channels` values.
+  ensureRuntime()
   if path == nil or sampleRate == nil or channels == nil or frames == nil or
       samples == nil:
     lastError = "path and every output pointer must be non-null"
@@ -148,6 +195,7 @@ proc uaud_decode_resampled(path: cstring; targetRate: cint; toMonoFlag: cint;
   ##
   ## The resampling is linear, which is right for analysis and wrong for
   ## listening; a resampler meant for listening would be a different call.
+  ensureRuntime()
   if path == nil or sampleRate == nil or channels == nil or frames == nil or
       samples == nil:
     lastError = "path and every output pointer must be non-null"
@@ -182,6 +230,7 @@ proc uaud_write_wave(path: cstring; samples: ptr cfloat; sampleRate,
                      bitsPerSample: cint): cint {.exportc, cdecl, dynlib,
                          raises: [].} =
   ## Write interleaved floats as a RIFF/WAVE file, 16 or 24 bits.
+  ensureRuntime()
   if path == nil or samples == nil:
     lastError = "path and samples must be non-null"
     return cint(uaudErrArg)
@@ -221,6 +270,7 @@ proc uaud_write_flac(path: cstring; samples: ptr cfloat; sampleRate,
                      bitsPerSample: cint): cint {.exportc, cdecl, dynlib,
                          raises: [].} =
   ## Encode interleaved floats to a native FLAC file, losslessly.
+  ensureRuntime()
   if path == nil or samples == nil:
     lastError = "path and samples must be non-null"
     return cint(uaudErrArg)
@@ -257,6 +307,7 @@ proc uaud_write_alac(path: cstring; samples: ptr cfloat; sampleRate,
                      bitsPerSample: cint): cint {.exportc, cdecl, dynlib,
                          raises: [].} =
   ## Encode interleaved floats to an `.m4a` holding one ALAC track, losslessly.
+  ensureRuntime()
   if path == nil or samples == nil:
     lastError = "path and samples must be non-null"
     return cint(uaudErrArg)
@@ -290,6 +341,7 @@ proc uaud_write_alac(path: cstring; samples: ptr cfloat; sampleRate,
 
 proc uaud_free(buffer: pointer) {.exportc, cdecl, dynlib, raises: [].} =
   ## Release a buffer this library allocated. NULL is accepted.
+  ensureRuntime()
   if buffer != nil: dealloc(buffer)
 
 proc uaud_fingerprint(path: cstring; duration: ptr cdouble;
@@ -298,6 +350,7 @@ proc uaud_fingerprint(path: cstring; duration: ptr cdouble;
   ## Fingerprint a file. The words are allocated here and released with
   ## `uaud_free`; a recording too short to compare yields a count of zero and
   ## a null pointer, not an error.
+  ensureRuntime()
   if path == nil or duration == nil or words == nil or count == nil:
     lastError = "path and every output pointer must be non-null"
     return cint(uaudErrArg)
@@ -344,6 +397,7 @@ proc uaud_chroma_fingerprint(path: cstring; duration: ptr cdouble;
   ##
   ## Allocated here and released with `uaud_free`; a recording too short yields
   ## a count of zero and a null pointer, not an error.
+  ensureRuntime()
   if path == nil or duration == nil or words == nil or count == nil:
     lastError = "path and every output pointer must be non-null"
     return cint(uaudErrArg)
@@ -382,6 +436,7 @@ proc uaud_chroma_similarity(a: ptr uint32; aCount: cint; b: ptr uint32;
                            {.exportc, cdecl, dynlib, raises: [].} =
   ## How alike two chroma fingerprints are, in [0, 1]. Two empty ones are not
   ## alike: they are unknown, which reads as 0.
+  ensureRuntime()
   if a == nil or b == nil or aCount <= 0 or bCount <= 0: return 0.0
   var left, right: ChromaFingerprint
   let leftArray = cast[ptr UncheckedArray[uint32]](a)
@@ -422,6 +477,7 @@ proc uaud_tags_json(path: cstring; json: ptr cstring): cint
   ## A file carrying no tags yields an object with empty fields, not an error:
   ## having nothing to say is not a failure. `date` is whatever the file wrote,
   ## unparsed, because tag dates follow no agreed format.
+  ensureRuntime()
   if path == nil or json == nil:
     lastError = "path and json must be non-null"
     return cint(uaudErrArg)
@@ -470,6 +526,7 @@ proc uaud_similarity(a: ptr uint32; aCount: cint; b: ptr uint32;
                      bCount: cint): cdouble {.exportc, cdecl, dynlib, raises: [].} =
   ## How alike two fingerprints are, in [0, 1]. Two empty fingerprints are
   ## not alike: they are unknown, which reads as 0.
+  ensureRuntime()
   if a == nil or b == nil or aCount <= 0 or bCount <= 0: return 0.0
   var left, right: Fingerprint
   let leftArray = cast[ptr UncheckedArray[uint32]](a)
@@ -486,6 +543,7 @@ proc uaud_offset_similarity(a: ptr uint32; aCount: cint; b: ptr uint32;
                            {.exportc, cdecl, dynlib, raises: [].} =
   ## The best similarity over a bounded time shift, for two copies of a
   ## recording that start at different points.
+  ensureRuntime()
   if a == nil or b == nil or aCount <= 0 or bCount <= 0 or maxShift < 0:
     return 0.0
   var first, second: Fingerprint
@@ -506,6 +564,7 @@ proc uaud_wave_probe(path: cstring; sampleRate, channels: ptr cint;
   ## Reads the whole file, because a WAV declares its size in a header that
   ## cannot be trusted: the frame count reported here is the one the data
   ## actually holds.
+  ensureRuntime()
   if path == nil or sampleRate == nil or channels == nil or frames == nil:
     lastError = "path and every output pointer must be non-null"
     return cint(uaudErrArg)
@@ -547,6 +606,7 @@ proc uaud_wave_writer_open(path: cstring; sampleRate, channels,
   ## what patches the sizes the header declares. A file abandoned without it
   ## keeps the provisional sizes and does not read back as a WAV at all,
   ## whatever reached the disk.
+  ensureRuntime()
   if path == nil or writer == nil:
     lastError = "path and writer must be non-null"
     return cint(uaudErrArg)
@@ -584,6 +644,7 @@ proc uaud_wave_writer_write(writer: pointer; samples: ptr cfloat;
                             count: clonglong): cint
                            {.exportc, cdecl, dynlib, raises: [].} =
   ## Append `count` interleaved values: whole frames only, `channels` each.
+  ensureRuntime()
   if writer == nil or (samples == nil and count > 0):
     lastError = "writer must be non-null, and samples too when count is not 0"
     return cint(uaudErrArg)
@@ -615,6 +676,7 @@ proc uaud_wave_writer_write(writer: pointer; samples: ptr cfloat;
 proc uaud_wave_writer_frames(writer: pointer; frames: ptr clonglong): cint
                             {.exportc, cdecl, dynlib, raises: [].} =
   ## Frames written so far, per channel.
+  ensureRuntime()
   if writer == nil or frames == nil:
     lastError = "writer and frames must be non-null"
     return cint(uaudErrArg)
@@ -633,6 +695,7 @@ proc uaud_wave_writer_close(writer: pointer): cint
   ## The handle is spent: passing it again is undefined, as with a pointer
   ## already freed. The library cannot check that for you — the memory is gone
   ## on return — so a caller that may close twice keeps its own flag.
+  ensureRuntime()
   if writer == nil:
     lastError = "writer must be non-null"
     return cint(uaudErrArg)
