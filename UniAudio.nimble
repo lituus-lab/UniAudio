@@ -51,6 +51,7 @@ task test, "Nim tests (debug, contracts active)":
   exec "nim c -r --path:src -o:build/test_robustness tests/test_robustness.nim"
   exec "nim c -r --path:src -o:build/test_fingerprint tests/test_fingerprint.nim"
   exec "nim c -r --path:src -o:build/test_chroma tests/test_chroma.nim"
+  exec "nim c -r --path:src -o:build/test_probe tests/test_probe.nim"
 
 task testRelease, "Nim tests (release, contracts compiled away)":
   exec "nim c -r -d:release --path:src -o:build/test_bitio_rel tests/test_bitio.nim"
@@ -66,6 +67,7 @@ task testRelease, "Nim tests (release, contracts compiled away)":
   exec "nim c -r -d:release --path:src -o:build/test_robustness_rel tests/test_robustness.nim"
   exec "nim c -r -d:release --path:src -o:build/test_fingerprint_rel tests/test_fingerprint.nim"
   exec "nim c -r -d:release --path:src -o:build/test_chroma_rel tests/test_chroma.nim"
+  exec "nim c -r -d:release --path:src -o:build/test_probe_rel tests/test_probe.nim"
 
 task testCi, "Nim tests (CI subset, debug)":
   exec "nim c -r --path:src -o:build/test_pcm tests/test_pcm.nim"
@@ -79,6 +81,7 @@ task testCi, "Nim tests (CI subset, debug)":
   exec "nim c -r --path:src -o:build/test_robustness tests/test_robustness.nim"
   exec "nim c -r --path:src -o:build/test_fingerprint tests/test_fingerprint.nim"
   exec "nim c -r --path:src -o:build/test_chroma tests/test_chroma.nim"
+  exec "nim c -r --path:src -o:build/test_probe tests/test_probe.nim"
 
 task testCiRelease, "Nim tests (CI subset, release)":
   exec "nim c -r -d:release --path:src -o:build/test_pcm_rel tests/test_pcm.nim"
@@ -92,6 +95,7 @@ task testCiRelease, "Nim tests (CI subset, release)":
   exec "nim c -r -d:release --path:src -o:build/test_robustness_rel tests/test_robustness.nim"
   exec "nim c -r -d:release --path:src -o:build/test_fingerprint_rel tests/test_fingerprint.nim"
   exec "nim c -r -d:release --path:src -o:build/test_chroma_rel tests/test_chroma.nim"
+  exec "nim c -r -d:release --path:src -o:build/test_probe_rel tests/test_probe.nim"
 
 task testAll, "debug + release + C ABI":
   exec "nimble test"
@@ -188,7 +192,7 @@ task coverage, "LCOV + HTML coverage report for the Nim sources (needs lcov)":
   # cover well then reads as zero.
   var pieces: seq[string]
   for suite in ["pcm", "aiff", "flac", "alac", "ogg", "vorbis", "mp3", "tags",
-                "fingerprint", "robustness"]:
+                "fingerprint", "robustness", "probe"]:
     let here = cache & "/" & suite
     exec "nim c --path:src --nimcache:" & here &
          " --debugger:native --passC:--coverage --passL:--coverage" &

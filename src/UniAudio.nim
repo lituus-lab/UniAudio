@@ -18,9 +18,9 @@ import UniAudio/fft
 import UniAudio/chroma
 import UniAudio/fingerprint
 import UniAudio/decode
+import UniAudio/probe
 export pcm, riff, aiff, flac, isobmff, alac, ogg, vorbis, mp3, tags, fft,
-  chroma,
-  fingerprint, decode
+  chroma, fingerprint, decode, probe
 
 const UniAudioVersion* = "0.1.0"
 
