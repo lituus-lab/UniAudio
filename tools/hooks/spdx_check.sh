@@ -15,6 +15,6 @@ while IFS= read -r f; do
     echo "Missing SPDX-License-Identifier in first 5 lines: $f"
     missing=1
   fi
-done < <(git ls-files -- '*.nim' '*.c' '*.h' '*.py' '*.pyx')
+done < <(git ls-files -- '*.nim' '*.nims' '*.nimble' '*.c' '*.h' '*.py' '*.pyx')
 
 exit "$missing"
