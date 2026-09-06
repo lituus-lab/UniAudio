@@ -6,6 +6,9 @@ Not a pytest module: it is copied next to a fixtures directory and run there,
 where `test_wave.py`'s relative paths no longer hold. Its job is to prove the
 wheel is self-contained — the extension alone would import fine while the
 shared library it needs stayed behind, and only a real decode catches that.
+
+The name matters: pytest collects `test_*.py`, and under its previous name this
+file was collected nowhere -- not by CI, not by `nimble pyTest`.
 """
 import pathlib
 import sys

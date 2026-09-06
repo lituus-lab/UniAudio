@@ -107,6 +107,6 @@ proc main() =
     formatFloat(tagMicroseconds, ffDecimal, 1), " us per file."
   echo "<!-- /table -->"
 
-  echo "sink = ", sink        # keeps every decode live across the suite
+  echo "sink = ", sink # keeps every decode live across the suite
 
 main()

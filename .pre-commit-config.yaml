@@ -43,13 +43,13 @@ repos:
     hooks:
       - id: nim-lint
         name: nimble lint (nimpretty)
-        entry: nimble lint
+        entry: tools/hooks/gated.sh lint
         language: system
         files: \.nim$
         pass_filenames: false
       - id: nim-vgraph
         name: nimble checkVGraph
-        entry: nimble checkVGraph
+        entry: tools/hooks/gated.sh checkVGraph
         language: system
         files: \.nim$
         pass_filenames: false
