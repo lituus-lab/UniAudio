@@ -42,14 +42,15 @@ whole PR into one commit whose subject is the title.
 ## Workflow
 
 1. Branch from `main`, one logical change per commit.
-2. Pass the gates, through the gate binary and never bare:
+2. Pass the gates, through the wrapper and never bare:
 
    ```bash
-   nim c --hints:off -o:build/unigate tools/gate.nim   # once
-   build/unigate testAll
-   build/unigate pyTest
+   tools/hooks/gated.sh testAll
+   tools/hooks/gated.sh pyTest
    ```
 
+   The wrapper builds the gate and rebuilds it whenever `tools/gate.nim` is
+   newer, so it cannot answer with an executable from an older checkout.
    `nimble testAll` on its own exits 0 even when a task inside it failed;
    that is the whole reason the gate exists.
 3. Open a PR; CI runs the Nim matrix on three platforms, the C ABI, Python,
