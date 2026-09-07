@@ -125,7 +125,10 @@ ext_modules = cythonize([ext], language_level=3) if ext.sources[0].endswith(".py
 setup(
     ext_modules=ext_modules,
     include_package_data=True,
-    package_data={"uniaudio": [LIB_NAME] if BUNDLED else []},
+    # data/: the quickstart notebook's audio. It reads them through
+    # importlib.resources, so it runs wherever the wheel is installed rather
+    # than only inside a checkout -- which is also how CI executes it.
+    package_data={"uniaudio": (["data/*"] + ([LIB_NAME] if BUNDLED else []))},
     exclude_package_data={"uniaudio": ["_core.c"]},
     zip_safe=False,
 )
