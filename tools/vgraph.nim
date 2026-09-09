@@ -131,52 +131,79 @@ func leadingIdent(line: string): string =
     if ch in IdentChars or ch.ord >= 0x80: result.add ch
     else: break
 
-func stripComments(line: string, blocks: var seq[bool]): string =
-  ## The code of a line, with comments removed. `blocks` carries the open
-  ## block comments across lines, one entry each: true for `##[`, which Nim
-  ## closes with `]##`, false for `#[`, closed with `]#`. Nim rejects the wrong
-  ## closer, so the two are tracked apart. The `#` of a quoted branch
-  ## specification is not a comment.
-  var inString = false
+type ScanState = object
+  ## What a line leaves open for the next one.
+  blocks: seq[bool] ## open block comments; true for `##[`, closed by `]##`
+  inTriple: bool    ## inside a `"""` string, which may span lines
+
+func stripComments(line: string, st: var ScanState): string =
+  ## The code of a line, with comments and string bodies removed. Nim closes
+  ## `##[` with `]##` and `#[` with `]#` and rejects the wrong one, so the two
+  ## are tracked apart. A `"""` string may span lines and a `\"` inside an
+  ## ordinary one is not its end; neither may make a `#` look like a comment.
   var at = 0
   while at < line.len:
-    if blocks.len > 0:
+    if st.inTriple:
+      if line.continuesWith("\"\"\"", at):
+        st.inTriple = false
+        inc at, 3
+      else:
+        inc at
+      continue
+    if st.blocks.len > 0:
       if line.continuesWith("##[", at):
-        blocks.add true
+        st.blocks.add true
         inc at, 3
       elif line.continuesWith("#[", at):
-        blocks.add false
+        st.blocks.add false
         inc at, 2
-      elif blocks[^1] and line.continuesWith("]##", at):
-        discard blocks.pop()
+      elif st.blocks[^1] and line.continuesWith("]##", at):
+        discard st.blocks.pop()
         inc at, 3
-      elif not blocks[^1] and line.continuesWith("]#", at):
-        discard blocks.pop()
+      elif not st.blocks[^1] and line.continuesWith("]#", at):
+        discard st.blocks.pop()
         inc at, 2
       else:
         inc at
       continue
-    if line[at] == '"':
-      inString = not inString
+    if line.continuesWith("\"\"\"", at):
+      st.inTriple = true
+      inc at, 3
+    elif line[at] == '"':
+      # An ordinary string, kept whole: requiredOn reads the specifications out
+      # of it. A backslash escapes the next character, so `\"` does not end it.
+      # No case covers this: a package name or URL carries no quote, so nothing
+      # a manifest can hold reaches it. Kept because the scanner is shared.
       result.add line[at]
       inc at
-    elif line[at] == '#' and not inString:
-      if line.continuesWith("##[", at):
-        blocks.add true
-        inc at, 3
-      elif line.continuesWith("#[", at):
-        blocks.add false
-        inc at, 2
-      else:
-        return result
+      while at < line.len:
+        if line[at] == '\\' and at + 1 < line.len:
+          result.add line[at]
+          result.add line[at + 1]
+          inc at, 2
+        elif line[at] == '"':
+          result.add line[at]
+          inc at
+          break
+        else:
+          result.add line[at]
+          inc at
+    elif line.continuesWith("##[", at):
+      st.blocks.add true
+      inc at, 3
+    elif line.continuesWith("#[", at):
+      st.blocks.add false
+      inc at, 2
+    elif line[at] == '#':
+      return result
     else:
       result.add line[at]
       inc at
 
 func withoutComment(line: string): string =
   ## The line up to a comment, for a line that opens none across others.
-  var blocks: seq[bool]
-  stripComments(line, blocks)
+  var st: ScanState
+  stripComments(line, st)
 
 func requiredOn(line: string): seq[string] =
   ## Package names a single `requires` line declares. Nimble accepts several
@@ -203,9 +230,9 @@ func requiredIn(lines: openArray[string]): seq[string] =
   ## Package names a manifest declares. A directive continued after a comma is
   ## joined before it is read, since Nim allows the argument list to span lines.
   var pending = ""
-  var blocks: seq[bool]
+  var st: ScanState
   for raw in lines:
-    let body = stripComments(raw, blocks).strip
+    let body = stripComments(raw, st).strip
     if pending.len > 0:
       # A comment-only line leaves nothing: appending it would drop the comma
       # the continuation is recognised by.
@@ -298,6 +325,17 @@ proc checkParser() =
        "]## \"UniUndeclared\""], @["a", "UniUndeclared"]),
     (@["requires \"a\", #[ outer #[ inner ]# still outer",
        "]# \"UniUndeclared\""], @["a", "UniUndeclared"]),
+    # A line inside a triple-quoted string is text, not a directive.
+    (@["description = \"\"\"", "requires \"UniFake\"", "\"\"\"",
+       "requires \"UniReal\""], @["UniReal"]),
+
+  ]
+  for (lines, want) in manifestCases:
+    let got = requiredIn(lines)
+    if got != want:
+      quit(&"vgraph: manifest regression on `{lines}`: got `{got}`, want `{want}`", 1)
+
+  const extraCases = [
     (@["requires \"a\"", "requires \"b\""], @["a", "b"]),
   ]
   for (lines, want) in manifestCases:
