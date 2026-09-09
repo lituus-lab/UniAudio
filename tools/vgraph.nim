@@ -328,14 +328,7 @@ proc checkParser() =
     # A line inside a triple-quoted string is text, not a directive.
     (@["description = \"\"\"", "requires \"UniFake\"", "\"\"\"",
        "requires \"UniReal\""], @["UniReal"]),
-
-  ]
-  for (lines, want) in manifestCases:
-    let got = requiredIn(lines)
-    if got != want:
-      quit(&"vgraph: manifest regression on `{lines}`: got `{got}`, want `{want}`", 1)
-
-  const extraCases = [
+    # Two directives, each read on its own.
     (@["requires \"a\"", "requires \"b\""], @["a", "b"]),
   ]
   for (lines, want) in manifestCases:
