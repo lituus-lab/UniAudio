@@ -109,6 +109,26 @@ proc packageName(spec: string): string =
     result = result.split(sep)[0]
   result = result.split({'/', '\\'})[^1]
 
+func nimIdentEq(a, b: string): bool =
+  ## Nim identifier equality: the first character is case sensitive, the rest
+  ## ignores case and underscores. `reQuires` and `requ_ires` call `requires`.
+  if a.len == 0 or b.len == 0: return a.len == b.len
+  if a[0] != b[0]: return false
+  var i, j = 1
+  while true:
+    while i < a.len and a[i] == '_': inc i
+    while j < b.len and b[j] == '_': inc j
+    if i >= a.len or j >= b.len: return i >= a.len and j >= b.len
+    if a[i].toLowerAscii != b[j].toLowerAscii: return false
+    inc i
+    inc j
+
+func leadingIdent(line: string): string =
+  ## The identifier a line opens with, empty when it opens with anything else.
+  for ch in line:
+    if ch in IdentChars: result.add ch
+    else: break
+
 func withoutComment(line: string): string =
   ## The line up to a `#` outside a string. The `#` of a quoted branch
   ## specification stays.
@@ -128,9 +148,9 @@ func requiredOn(line: string): seq[string] =
   ## [engines] allowlist. A trailing comment is not read, while the `#` of a
   ## quoted branch specification is.
   let trimmed = line.strip
-  if not trimmed.startsWith("requires"): return
-  # The directive, not a name starting with it: requiresExtra is not one.
-  if trimmed.len > 8 and trimmed[8] in IdentChars: return
+  # The directive itself, by Nim's own identifier rules; requiresExtra is a
+  # different identifier and stays out.
+  if not nimIdentEq(leadingIdent(trimmed), "requires"): return
   let body = withoutComment(trimmed)
   var index = body.find('"')
   while index >= 0:
@@ -153,7 +173,7 @@ func requiredIn(lines: openArray[string]): seq[string] =
       # the continuation is recognised by.
       if body.len == 0: continue
       pending.add " " & body
-    elif body.startsWith("requires"):
+    elif nimIdentEq(leadingIdent(body), "requires"):
       pending = body
     else:
       continue
@@ -215,6 +235,9 @@ proc checkParser() =
     """requires "a", "b"""": @["a", "b"],
     """requires "UniVector" # "UniPlot"""": @["UniVector"],
     """requiresExtra "UniVector"""": newSeq[string](),
+    """reQuires "UniA"""": @["UniA"],
+    """requ_ires "UniB"""": @["UniB"],
+    """Requires "UniC"""": newSeq[string](),
     """requires "https://github.com/lbartoletti/NimContracts#main"""":
     @["NimContracts"],
   }
