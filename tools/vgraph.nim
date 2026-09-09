@@ -125,21 +125,49 @@ func nimIdentEq(a, b: string): bool =
 
 func leadingIdent(line: string): string =
   ## The identifier a line opens with, empty when it opens with anything else.
+  ## Bytes above ASCII are part of it: Nim accepts `requires\u00e9` as an
+  ## identifier of its own, and stopping early would read it as the directive.
   for ch in line:
-    if ch in IdentChars: result.add ch
+    if ch in IdentChars or ch.ord >= 0x80: result.add ch
     else: break
 
-func withoutComment(line: string): string =
-  ## The line up to a `#` outside a string. The `#` of a quoted branch
-  ## specification stays.
+func stripComments(line: string, depth: var int): string =
+  ## The code of a line, with comments removed. `depth` carries `#[ ]#` nesting
+  ## across lines, since a block comment may open on one and close on another.
+  ## The `#` of a quoted branch specification is not a comment.
   var inString = false
-  for at, ch in line:
-    case ch
-    of '"': inString = not inString
+  var at = 0
+  while at < line.len:
+    if depth > 0:
+      if at + 1 < line.len and line[at] == ']' and line[at + 1] == '#':
+        dec depth
+        inc at, 2
+      elif at + 1 < line.len and line[at] == '#' and line[at + 1] == '[':
+        inc depth
+        inc at, 2
+      else:
+        inc at
+      continue
+    case line[at]
+    of '"':
+      inString = not inString
+      result.add line[at]
     of '#':
-      if not inString: return line[0 ..< at]
-    else: discard
-  line
+      if inString:
+        result.add line[at]
+      elif at + 1 < line.len and line[at + 1] == '[':
+        inc depth
+        inc at, 2
+        continue
+      else:
+        return result
+    else: result.add line[at]
+    inc at
+
+func withoutComment(line: string): string =
+  ## The line up to a comment, for a line that opens none across others.
+  var depth = 0
+  stripComments(line, depth)
 
 func requiredOn(line: string): seq[string] =
   ## Package names a single `requires` line declares. Nimble accepts several
@@ -166,8 +194,9 @@ func requiredIn(lines: openArray[string]): seq[string] =
   ## Package names a manifest declares. A directive continued after a comma is
   ## joined before it is read, since Nim allows the argument list to span lines.
   var pending = ""
+  var depth = 0
   for raw in lines:
-    let body = withoutComment(raw).strip
+    let body = stripComments(raw, depth).strip
     if pending.len > 0:
       # A comment-only line leaves nothing: appending it would drop the comma
       # the continuation is recognised by.
@@ -238,6 +267,7 @@ proc checkParser() =
     """reQuires "UniA"""": @["UniA"],
     """requ_ires "UniB"""": @["UniB"],
     """Requires "UniC"""": newSeq[string](),
+    "requires\u00e9 \"UniD\"": newSeq[string](),
     """requires "https://github.com/lbartoletti/NimContracts#main"""":
     @["NimContracts"],
   }
@@ -253,6 +283,8 @@ proc checkParser() =
     (@["requires \"a\", # note", "         \"b\""], @["a", "b"]),
     (@["requires \"a\",", "  # a note on its own line", "  \"UniUndeclared\""],
      @["a", "UniUndeclared"]),
+    (@["requires \"a\", #[ a block comment", "  still inside it",
+       "]# \"UniUndeclared\""], @["a", "UniUndeclared"]),
     (@["requires \"a\"", "requires \"b\""], @["a", "b"]),
   ]
   for (lines, want) in manifestCases:
