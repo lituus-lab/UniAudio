@@ -5,7 +5,7 @@
 ## (ADR-0001).
 ## Line-based scan of import/from/include, which covers the forms Nim sources
 ## actually use; a macro-built import would slip past it.
-import std/[os, strformat, strutils]
+import std/[json, os, osproc, strformat, strutils]
 
 const Cfg = "vgraph.cfg"
 
@@ -109,149 +109,32 @@ proc packageName(spec: string): string =
     result = result.split(sep)[0]
   result = result.split({'/', '\\'})[^1]
 
-func nimIdentEq(a, b: string): bool =
-  ## Nim identifier equality: the first character is case sensitive, the rest
-  ## ignores case and underscores. `reQuires` and `requ_ires` call `requires`.
-  if a.len == 0 or b.len == 0: return a.len == b.len
-  if a[0] != b[0]: return false
-  var i, j = 1
-  while true:
-    while i < a.len and a[i] == '_': inc i
-    while j < b.len and b[j] == '_': inc j
-    if i >= a.len or j >= b.len: return i >= a.len and j >= b.len
-    if a[i].toLowerAscii != b[j].toLowerAscii: return false
-    inc i
-    inc j
-
-func leadingIdent(line: string): string =
-  ## The identifier a line opens with, empty when it opens with anything else.
-  ## Bytes above ASCII are part of it: Nim accepts `requires\u00e9` as an
-  ## identifier of its own, and stopping early would read it as the directive.
-  for ch in line:
-    if ch in IdentChars or ch.ord >= 0x80: result.add ch
-    else: break
-
-type ScanState = object
-  ## What a line leaves open for the next one.
-  blocks: seq[bool] ## open block comments; true for `##[`, closed by `]##`
-  inTriple: bool    ## inside a `"""` string, which may span lines
-
-func stripComments(line: string, st: var ScanState): string =
-  ## The code of a line, with comments and string bodies removed. Nim closes
-  ## `##[` with `]##` and `#[` with `]#` and rejects the wrong one, so the two
-  ## are tracked apart. A `"""` string may span lines and a `\"` inside an
-  ## ordinary one is not its end; neither may make a `#` look like a comment.
-  var at = 0
-  while at < line.len:
-    if st.inTriple:
-      if line.continuesWith("\"\"\"", at):
-        st.inTriple = false
-        inc at, 3
-      else:
-        inc at
-      continue
-    if st.blocks.len > 0:
-      if line.continuesWith("##[", at):
-        st.blocks.add true
-        inc at, 3
-      elif line.continuesWith("#[", at):
-        st.blocks.add false
-        inc at, 2
-      elif st.blocks[^1] and line.continuesWith("]##", at):
-        discard st.blocks.pop()
-        inc at, 3
-      elif not st.blocks[^1] and line.continuesWith("]#", at):
-        discard st.blocks.pop()
-        inc at, 2
-      else:
-        inc at
-      continue
-    if line.continuesWith("\"\"\"", at):
-      st.inTriple = true
-      inc at, 3
-    elif line[at] == '"':
-      # An ordinary string, kept whole: requiredOn reads the specifications out
-      # of it. A backslash escapes the next character, so `\"` does not end it.
-      # No case covers this: a package name or URL carries no quote, so nothing
-      # a manifest can hold reaches it. Kept because the scanner is shared.
-      result.add line[at]
-      inc at
-      while at < line.len:
-        if line[at] == '\\' and at + 1 < line.len:
-          result.add line[at]
-          result.add line[at + 1]
-          inc at, 2
-        elif line[at] == '"':
-          result.add line[at]
-          inc at
-          break
-        else:
-          result.add line[at]
-          inc at
-    elif line.continuesWith("##[", at):
-      st.blocks.add true
-      inc at, 3
-    elif line.continuesWith("#[", at):
-      st.blocks.add false
-      inc at, 2
-    elif line[at] == '#':
-      return result
-    else:
-      result.add line[at]
-      inc at
-
-func withoutComment(line: string): string =
-  ## The line up to a comment, for a line that opens none across others.
-  var st: ScanState
-  stripComments(line, st)
-
-func requiredOn(line: string): seq[string] =
-  ## Package names a single `requires` line declares. Nimble accepts several
-  ## per directive, comma separated inside one string and as several strings
-  ## on one line; reading the first alone would let the rest past the
-  ## [engines] allowlist. A trailing comment is not read, while the `#` of a
-  ## quoted branch specification is.
-  let trimmed = line.strip
-  # The directive itself, by Nim's own identifier rules; requiresExtra is a
-  # different identifier and stays out.
-  if not nimIdentEq(leadingIdent(trimmed), "requires"): return
-  let body = withoutComment(trimmed)
-  var index = body.find('"')
-  while index >= 0:
-    let stop = body.find('"', index + 1)
-    if stop <= index: break
-    for spec in body[index + 1 ..< stop].split(','):
-      let name = packageName(spec.strip)
-      if name.len > 0:
-        result.add name
-    index = body.find('"', stop + 1)
-
-func requiredIn(lines: openArray[string]): seq[string] =
-  ## Package names a manifest declares. A directive continued after a comma is
-  ## joined before it is read, since Nim allows the argument list to span lines.
-  var pending = ""
-  var st: ScanState
-  for raw in lines:
-    let body = stripComments(raw, st).strip
-    if pending.len > 0:
-      # A comment-only line leaves nothing: appending it would drop the comma
-      # the continuation is recognised by.
-      if body.len == 0: continue
-      pending.add " " & body
-    elif nimIdentEq(leadingIdent(body), "requires"):
-      pending = body
-    else:
-      continue
-    if pending.endsWith(","): continue
-    result.add requiredOn(pending)
-    pending = ""
-  if pending.len > 0:
-    result.add requiredOn(pending)
-
 iterator requiredPackages(path: string): string =
-  ## Package name of every requirement in the manifest.
-  for name in requiredIn(readFile(path).splitLines):
-    yield name
+  ## Package name of every requirement, as nimble itself reports them.
+  ##
+  ## `nimble dump --json` hands back `requires` already parsed by Nim, so none
+  ## of this reads the manifest as text. The parser that did was rewritten
+  ## thirteen times over comment forms, identifier equality, line continuations
+  ## and string literals -- each a way Nim spells something a hand-rolled
+  ## scanner had to learn. `path` is the manifest, kept for the error message.
+  let dumped = execProcess("nimble", args = ["dump", "--json"],
+                           options = {poUsePath, poStdErrToStdOut})
+  let opening = dumped.find('{')
+  if opening < 0:
+    quit(&"vgraph: `nimble dump --json` produced no object for {path}:\n" &
+         dumped, 1)
+  var parsed: JsonNode
+  try:
+    parsed = parseJson(dumped[opening .. ^1])
+  except JsonParsingError:
+    quit(&"vgraph: `nimble dump --json` was unreadable for {path}:\n" &
+         dumped, 1)
+  if "requires" notin parsed:
+    quit(&"vgraph: `nimble dump --json` listed no requires for {path}", 1)
+  for entry in parsed["requires"]:
+    let name = packageName(entry{"name"}.getStr)
+    if name.len > 0:
+      yield name
 
 proc confinements(): seq[(string, string)] =
   ## Entries under `[confined]`, each `Package = path`: only that path may
@@ -276,9 +159,9 @@ proc mayImport*(path, module: string, rules: seq[(string, string)]): bool =
   true
 
 proc checkParser() =
-  ## Check the parsers against known inputs before judging any repository.
-  ## They travel with the tool rather than a test file each manifest would
-  ## wire in.
+  ## Check the text handling against known inputs before judging any
+  ## repository. It travels with the tool rather than a test file each manifest
+  ## would wire in.
   const cases = {
     "std/[os, strutils]": "std/os,std/strutils,",
     "std/[os], a, b": "std/os,a,b,",
@@ -290,51 +173,20 @@ proc checkParser() =
   for (input, want) in cases:
     let got = expandGrouped(input)
     if got != want:
-      quit(&"vgraph: parser regression on `{input}`: got `{got}`, want `{want}`", 1)
+      quit(&"vgraph: import parser regression on `{input}`: got `{got}`, " &
+           &"want `{want}`", 1)
 
-  # Several requirements per directive, which nimble accepts and the allowlist
-  # must see.
-  const requireCases = {
-    """requires "nim >= 2.0.0"""": @["nim"],
-    """requires "nim >= 2.0.0, UniUndeclared"""": @["nim", "UniUndeclared"],
-    """requires "a", "b"""": @["a", "b"],
-    """requires "UniVector" # "UniPlot"""": @["UniVector"],
-    """requiresExtra "UniVector"""": newSeq[string](),
-    """reQuires "UniA"""": @["UniA"],
-    """requ_ires "UniB"""": @["UniB"],
-    """Requires "UniC"""": newSeq[string](),
-    "requires\u00e9 \"UniD\"": newSeq[string](),
-    """requires "https://github.com/lbartoletti/NimContracts#main"""":
-    @["NimContracts"],
+  # What nimble reports for a requirement, reduced to the package name.
+  const names = {
+    "nim": "nim",
+    "https://github.com/lbartoletti/NimContracts": "NimContracts",
+    "https://github.com/lituus-lab/UniColor": "UniColor",
   }
-  for (line, want) in requireCases:
-    let got = requiredOn(line)
+  for (input, want) in names:
+    let got = packageName(input)
     if got != want:
-      quit(&"vgraph: requires regression on `{line}`: got `{got}`, want `{want}`", 1)
-
-  # A directive whose argument list spans lines, which Nim allows after a comma.
-  const manifestCases = [
-    (@["requires \"a\",", "         \"UniUndeclared\""],
-     @["a", "UniUndeclared"]),
-    (@["requires \"a\", # note", "         \"b\""], @["a", "b"]),
-    (@["requires \"a\",", "  # a note on its own line", "  \"UniUndeclared\""],
-     @["a", "UniUndeclared"]),
-    (@["requires \"a\", #[ a block comment", "  still inside it",
-       "]# \"UniUndeclared\""], @["a", "UniUndeclared"]),
-    (@["requires \"a\", ##[ a doc block", "  still inside it",
-       "]## \"UniUndeclared\""], @["a", "UniUndeclared"]),
-    (@["requires \"a\", #[ outer #[ inner ]# still outer",
-       "]# \"UniUndeclared\""], @["a", "UniUndeclared"]),
-    # A line inside a triple-quoted string is text, not a directive.
-    (@["description = \"\"\"", "requires \"UniFake\"", "\"\"\"",
-       "requires \"UniReal\""], @["UniReal"]),
-    # Two directives, each read on its own.
-    (@["requires \"a\"", "requires \"b\""], @["a", "b"]),
-  ]
-  for (lines, want) in manifestCases:
-    let got = requiredIn(lines)
-    if got != want:
-      quit(&"vgraph: manifest regression on `{lines}`: got `{got}`, want `{want}`", 1)
+      quit(&"vgraph: package name regression on `{input}`: got `{got}`, " &
+           &"want `{want}`", 1)
 
 proc main() =
   checkParser()
