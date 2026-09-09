@@ -131,43 +131,52 @@ func leadingIdent(line: string): string =
     if ch in IdentChars or ch.ord >= 0x80: result.add ch
     else: break
 
-func stripComments(line: string, depth: var int): string =
-  ## The code of a line, with comments removed. `depth` carries `#[ ]#` nesting
-  ## across lines, since a block comment may open on one and close on another.
-  ## The `#` of a quoted branch specification is not a comment.
+func stripComments(line: string, blocks: var seq[bool]): string =
+  ## The code of a line, with comments removed. `blocks` carries the open
+  ## block comments across lines, one entry each: true for `##[`, which Nim
+  ## closes with `]##`, false for `#[`, closed with `]#`. Nim rejects the wrong
+  ## closer, so the two are tracked apart. The `#` of a quoted branch
+  ## specification is not a comment.
   var inString = false
   var at = 0
   while at < line.len:
-    if depth > 0:
-      if at + 1 < line.len and line[at] == ']' and line[at + 1] == '#':
-        dec depth
+    if blocks.len > 0:
+      if line.continuesWith("##[", at):
+        blocks.add true
+        inc at, 3
+      elif line.continuesWith("#[", at):
+        blocks.add false
         inc at, 2
-      elif at + 1 < line.len and line[at] == '#' and line[at + 1] == '[':
-        inc depth
+      elif blocks[^1] and line.continuesWith("]##", at):
+        discard blocks.pop()
+        inc at, 3
+      elif not blocks[^1] and line.continuesWith("]#", at):
+        discard blocks.pop()
         inc at, 2
       else:
         inc at
       continue
-    case line[at]
-    of '"':
+    if line[at] == '"':
       inString = not inString
       result.add line[at]
-    of '#':
-      if inString:
-        result.add line[at]
-      elif at + 1 < line.len and line[at + 1] == '[':
-        inc depth
+      inc at
+    elif line[at] == '#' and not inString:
+      if line.continuesWith("##[", at):
+        blocks.add true
+        inc at, 3
+      elif line.continuesWith("#[", at):
+        blocks.add false
         inc at, 2
-        continue
       else:
         return result
-    else: result.add line[at]
-    inc at
+    else:
+      result.add line[at]
+      inc at
 
 func withoutComment(line: string): string =
   ## The line up to a comment, for a line that opens none across others.
-  var depth = 0
-  stripComments(line, depth)
+  var blocks: seq[bool]
+  stripComments(line, blocks)
 
 func requiredOn(line: string): seq[string] =
   ## Package names a single `requires` line declares. Nimble accepts several
@@ -194,9 +203,9 @@ func requiredIn(lines: openArray[string]): seq[string] =
   ## Package names a manifest declares. A directive continued after a comma is
   ## joined before it is read, since Nim allows the argument list to span lines.
   var pending = ""
-  var depth = 0
+  var blocks: seq[bool]
   for raw in lines:
-    let body = stripComments(raw, depth).strip
+    let body = stripComments(raw, blocks).strip
     if pending.len > 0:
       # A comment-only line leaves nothing: appending it would drop the comma
       # the continuation is recognised by.
@@ -284,6 +293,10 @@ proc checkParser() =
     (@["requires \"a\",", "  # a note on its own line", "  \"UniUndeclared\""],
      @["a", "UniUndeclared"]),
     (@["requires \"a\", #[ a block comment", "  still inside it",
+       "]# \"UniUndeclared\""], @["a", "UniUndeclared"]),
+    (@["requires \"a\", ##[ a doc block", "  still inside it",
+       "]## \"UniUndeclared\""], @["a", "UniUndeclared"]),
+    (@["requires \"a\", #[ outer #[ inner ]# still outer",
        "]# \"UniUndeclared\""], @["a", "UniUndeclared"]),
     (@["requires \"a\"", "requires \"b\""], @["a", "b"]),
   ]
