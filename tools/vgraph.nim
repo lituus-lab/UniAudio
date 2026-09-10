@@ -5,7 +5,7 @@
 ## (ADR-0001).
 ## Line-based scan of import/from/include, which covers the forms Nim sources
 ## actually use; a macro-built import would slip past it.
-import std/[json, os, osproc, strformat, strutils]
+import std/[json, os, osproc, streams, strformat, strutils]
 
 const Cfg = "vgraph.cfg"
 
@@ -117,18 +117,27 @@ iterator requiredPackages(path: string): string =
   ## thirteen times over comment forms, identifier equality, line continuations
   ## and string literals -- each a way Nim spells something a hand-rolled
   ## scanner had to learn. `path` is the manifest, kept for the error message.
-  let dumped = execProcess("nimble", args = ["dump", "--json"],
-                           options = {poUsePath, poStdErrToStdOut})
-  let opening = dumped.find('{')
-  if opening < 0:
-    quit(&"vgraph: `nimble dump --json` produced no object for {path}:\n" &
-         dumped, 1)
+  # Streams kept apart: merging them would let a diagnostic brace pass for the
+  # start of the object. The exit code is not consulted because it does not
+  # answer -- measured, `nimble dump --json` returns 0 on a manifest it cannot
+  # resolve and writes a stack trace to stdout where the object should be. What
+  # the output is, not what the code says, is the only usable verdict.
+  let process = startProcess("nimble", args = ["dump", "--json"],
+                             options = {poUsePath})
+  let dumped = process.outputStream.readAll()
+  let diagnostics = process.errorStream.readAll()
+  discard process.waitForExit()
+  process.close()
+  let body = dumped.strip
+  if not body.startsWith("{"):
+    quit(&"vgraph: `nimble dump --json` did not describe {path}:\n" &
+         body & diagnostics, 1)
   var parsed: JsonNode
   try:
-    parsed = parseJson(dumped[opening .. ^1])
+    parsed = parseJson(body)
   except JsonParsingError:
     quit(&"vgraph: `nimble dump --json` was unreadable for {path}:\n" &
-         dumped, 1)
+         body & diagnostics, 1)
   if "requires" notin parsed:
     quit(&"vgraph: `nimble dump --json` listed no requires for {path}", 1)
   for entry in parsed["requires"]:
