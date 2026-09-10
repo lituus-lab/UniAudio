@@ -5,7 +5,7 @@
 ## (ADR-0001).
 ## Line-based scan of import/from/include, which covers the forms Nim sources
 ## actually use; a macro-built import would slip past it.
-import std/[os, strformat, strutils]
+import std/[json, os, osproc, streams, strformat, strutils]
 
 const Cfg = "vgraph.cfg"
 
@@ -73,9 +73,7 @@ proc expandGrouped(body: string): string =
     of ']':
       if cur.strip.len > 0:
         result &= prefix & cur.strip & ","
-      # The prefix belongs to the group that just closed. Keeping it turned the
-      # next item on the same line into std/c_api/private, which layerOfModule
-      # reads as external and skips.
+      # Reset the prefix: it belongs to the group that just closed.
       prefix = ""
       depth = 0
       cur = ""
@@ -112,16 +110,40 @@ proc packageName(spec: string): string =
   result = result.split({'/', '\\'})[^1]
 
 iterator requiredPackages(path: string): string =
-  ## Package name of every `requires` line.
-  for raw in readFile(path).splitLines:
-    let line = raw.strip
-    if not line.startsWith("requires"): continue
-    let a = line.find('"')
-    let b = line.find('"', a + 1)
-    if a >= 0 and b > a:
-      let name = packageName(line[a + 1 ..< b])
-      if name.len > 0:
-        yield name
+  ## Package name of every requirement, as nimble itself reports them.
+  ##
+  ## `nimble dump --json` hands back `requires` already parsed by Nim, so none
+  ## of this reads the manifest as text. The parser that did was rewritten
+  ## thirteen times over comment forms, identifier equality, line continuations
+  ## and string literals -- each a way Nim spells something a hand-rolled
+  ## scanner had to learn. `path` is the manifest, kept for the error message.
+  # Streams kept apart: merging them would let a diagnostic brace pass for the
+  # start of the object. The exit code is not consulted because it does not
+  # answer -- measured, `nimble dump --json` returns 0 on a manifest it cannot
+  # resolve and writes a stack trace to stdout where the object should be. What
+  # the output is, not what the code says, is the only usable verdict.
+  let process = startProcess("nimble", args = ["dump", "--json"],
+                             options = {poUsePath})
+  let dumped = process.outputStream.readAll()
+  let diagnostics = process.errorStream.readAll()
+  discard process.waitForExit()
+  process.close()
+  let body = dumped.strip
+  if not body.startsWith("{"):
+    quit(&"vgraph: `nimble dump --json` did not describe {path}:\n" &
+         body & diagnostics, 1)
+  var parsed: JsonNode
+  try:
+    parsed = parseJson(body)
+  except JsonParsingError:
+    quit(&"vgraph: `nimble dump --json` was unreadable for {path}:\n" &
+         body & diagnostics, 1)
+  if "requires" notin parsed:
+    quit(&"vgraph: `nimble dump --json` listed no requires for {path}", 1)
+  for entry in parsed["requires"]:
+    let name = packageName(entry{"name"}.getStr)
+    if name.len > 0:
+      yield name
 
 proc confinements(): seq[(string, string)] =
   ## Entries under `[confined]`, each `Package = path`: only that path may
@@ -145,7 +167,38 @@ proc mayImport*(path, module: string, rules: seq[(string, string)]): bool =
         return false
   true
 
+proc checkParser() =
+  ## Check the text handling against known inputs before judging any
+  ## repository. It travels with the tool rather than a test file each manifest
+  ## would wire in.
+  const cases = {
+    "std/[os, strutils]": "std/os,std/strutils,",
+    "std/[os], a, b": "std/os,a,b,",
+    "std/[os, strutils], c_api/private, other":
+    "std/os,std/strutils,c_api/private,other,",
+    "std/[os], x/[y, z], w": "std/os,x/y,x/z,w,",
+    "a, b, c": "a,b,c,",
+  }
+  for (input, want) in cases:
+    let got = expandGrouped(input)
+    if got != want:
+      quit(&"vgraph: import parser regression on `{input}`: got `{got}`, " &
+           &"want `{want}`", 1)
+
+  # What nimble reports for a requirement, reduced to the package name.
+  const names = {
+    "nim": "nim",
+    "https://github.com/lbartoletti/NimContracts": "NimContracts",
+    "https://github.com/lituus-lab/UniColor": "UniColor",
+  }
+  for (input, want) in names:
+    let got = packageName(input)
+    if got != want:
+      quit(&"vgraph: package name regression on `{input}`: got `{got}`, " &
+           &"want `{want}`", 1)
+
 proc main() =
+  checkParser()
   if not fileExists(Cfg):
     quit(&"vgraph: {Cfg} not found", 1)
   let order = section("layers")
@@ -159,10 +212,8 @@ proc main() =
     let own = layerOf(path, order)
     if own >= 0:
       inc checked
-    # Confinement holds for every module under src, layered or not: the
-    # umbrella and version.nim sit under no layer, and skipping them let them
-    # import a confined package unchallenged. Only the layer order needs a
-    # layer to compare against.
+    # Confinement applies to every module under src, layered or not; only the
+    # layer-order comparison needs a layer.
     for module in importedModules(path):
       if not mayImport(path, module, confined):
         violations.add &"{path}: imports {module}, confined elsewhere"
