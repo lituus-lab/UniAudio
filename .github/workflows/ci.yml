@@ -21,7 +21,7 @@ jobs:
     # The CI every Uni* engine runs, held once in lituus-lab/.github rather
     # than copied per repo. Pinned by commit: a moving ref here would be the
     # same unpinned dependency the family forbids everywhere else.
-    uses: lituus-lab/.github/.github/workflows/uni-nim-library.yml@6c44c93c77d604d950b74309d75592a7a68f5c42
+    uses: lituus-lab/.github/.github/workflows/uni-nim-library.yml@739e552733d012b5938da3fbbf05c06913d31af1
     permissions:
       # A called workflow cannot obtain more than the calling job grants.
       contents: read
