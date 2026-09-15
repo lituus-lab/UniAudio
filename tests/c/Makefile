@@ -10,7 +10,10 @@ ifeq ($(origin CC),default)
 endif
 
 ROOT   := $(CURDIR)/../..
-CFLAGS := -I$(ROOT)/include -O2 -Wall -Wextra -std=c11
+# EXTRA_CFLAGS is a hook, not a knob: `nimble coverage` passes --coverage
+# through it. Replacing CFLAGS from the command line would drop the include
+# path, and here or in a sibling the -D the test needs.
+CFLAGS := -I$(ROOT)/include -O2 -Wall -Wextra -std=c11 $(EXTRA_CFLAGS)
 LIB    := $(ROOT)/libUniAudio.a
 # The codecs call round, roundf and sin. glibc keeps libm separate, so Linux
 # must ask for it; macOS resolves -lm through libSystem and MinGW ships its own.

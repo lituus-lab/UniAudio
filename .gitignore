@@ -60,3 +60,7 @@ examples/c/demo
 nimble.develop
 nimble.paths
 nimbledeps
+# the coverage build of the C consumer, and the gcov pair make leaves beside it
+tests/c/test_capi_cov
+tests/c/*.gcda
+tests/c/*.gcno
